@@ -4,9 +4,18 @@
 - insert:
     - id: dsh-superagent
       name: dsh-superagent
+    # The chat Source: what the person writes in the main Session is the intake, so a request needs no account and no
+    # network. It is the Source a local installation uses.
+    - id: dsh-superagent-chat
+      name: dsh-superagent/chat-watch
+    # The other Sources stay in the bundle and off: switch one on, configure it in the panel, and restart to use it. The
+    # local inbox reads request files from a directory instead of the conversation.
+    - id: dsh-superagent-local
+      name: dsh-superagent/local-watch
+      disabled: true
     - id: dsh-superagent-github
       name: dsh-superagent/github-watch
-    # Optional Feishu Source; requires configuring a bot CLI after enabling.
+      disabled: true
     - id: dsh-superagent-feishu
       name: dsh-superagent/feishu-watch
       disabled: true

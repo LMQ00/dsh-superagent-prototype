@@ -14,6 +14,8 @@ export const HEALTH_TEXT = {
   feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
   feishuBotMissing: 'Waiting for the Feishu bot',
   pollFailures: '{count} consecutive failed polls; last: {error}',
+  localInbox: 'Reading {path}',
+  chatSession: 'Receiving requests from the main Session',
 } as const
 export type HealthCode = keyof typeof HEALTH_TEXT
 export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string> }
@@ -22,6 +24,8 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 }
 export interface SourceHost {
   readonly sources: SourceRegistry
+  /** The main Session's id, the person's own conversation with this installation. */
+  readonly masterId: string
   /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
   context(kind: { kind: string; health: readonly string[] }): SourceContext
 }

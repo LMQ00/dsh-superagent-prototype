@@ -88,6 +88,8 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const { stateDir } = machine
   const accounts = GithubAccountsSchema.parse(github ?? {})
   const remote = accounts.repository
+  // A local installation names neither a repository nor an agent CLI: nothing reaches it from outside, and its Sources are local.
+  if (!remote && !accounts.cli) return { ...machine, repository: '', github: { cli: '', login: '', noreply: '' } }
   if (!remote) throw new SetupError('repositoryUnset')
   if (!accounts.cli) throw new SetupError('agentCliUnset')
   let cli: string

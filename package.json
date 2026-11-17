@@ -14,6 +14,8 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
+    "./chat-watch": "./lib/chat-watch.js",
+    "./local-watch": "./lib/local-watch.js",
     "./github-watch": "./lib/github-watch.js",
     "./feishu-watch": "./lib/feishu-watch.js",
     "./package.json": "./package.json",

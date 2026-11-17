@@ -26,6 +26,7 @@ export const AssessmentSchema = z.object({
   direction: AdmissionDirectionSchema.describe('Required for every decision.'),
   title: z.string().min(1).max(160),
   worktree_name: WorktreeNameSchema.optional(),
+  project: z.string().trim().max(40).nullish().describe('For acceptance: the name of the registered project this request belongs to; omit only when no project is registered or the request names its own directory in the ticket title.'),
   scope: z.string().max(1500),
   intent_evidence: z.string().trim().min(1).max(700).nullish().describe('For acceptance: the quotes that establish the three facts.'),
   acknowledgement: AcknowledgementSchema.nullish().describe('For acceptance: one sentence in the source language, posted as a reply to the trigger; omit only when a matched rule asks for silence.'),

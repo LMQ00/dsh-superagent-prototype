@@ -30,6 +30,7 @@ export function directionAllowed(value: unknown): value is AdmissionDirection {
 export interface Assessment {
   decision: 'accept' | 'ignore' | 'unavailable'; rule_assessments: RuleAssessment[]; direction: unknown
   title: string; scope: string; reason: string; intent_evidence?: string | null; acknowledgement?: string | null; worktree_name?: string
+  project?: string | null
 }
 /**
  * Validate an assessment against enabled rules and convert it into an engine `AssessmentOutcome`.
@@ -37,7 +38,7 @@ export interface Assessment {
  * inferred candidate only in `auto` mode (otherwise recording it as `would_accept`).
  * @throws when `rule_assessments` does not cover every enabled rule exactly once, or an accept omits `intent_evidence`.
  */
-export function assessmentOutcome(assessment: Assessment, settings: Pick<Settings, 'policy' | 'eval'>, strength: Strength): AssessmentOutcome {
+export function assessmentOutcome(assessment: Assessment, settings: Pick<Settings, 'policy' | 'eval' | 'executor'>, strength: Strength): AssessmentOutcome {
   const enabled = settings.policy.rules.filter(rule => rule.enabled)
   const judged = assessment.rule_assessments
   const ids = new Set(judged.map(item => item.rule_id))
@@ -51,13 +52,17 @@ export function assessmentOutcome(assessment: Assessment, settings: Pick<Setting
   if (!directionAllowed(assessment.direction)) return { kind: 'ignore', audit, reason: { code: 'directionUnsettled' } }
   if (!matches.length) return { kind: 'ignore', audit, reason: { code: 'noRuleMatched' } }
   if (!assessment.intent_evidence) throw new Error('Acceptance requires intent_evidence')
+  // A project the settings do not register has no directory to prepare, so the acceptance cannot stand.
+  if (assessment.project && !settings.executor.projects.some(project => project.name === assessment.project)) {
+    return { kind: 'ignore', audit, reason: { code: 'unknownProject', values: { project: assessment.project } } }
+  }
   const { title, scope, worktree_name: name } = assessment
   if (strength === 'inferred' && settings.eval.mode !== 'auto') {
     const proposal = { title, scope, worktree_name: name }
     return { kind: 'ignore', audit: { ...audit, would_accept: true, proposal }, reason: { code: 'observed', values: { text: assessment.reason } } }
   }
   return { kind: 'accept', title, scope, reason: assessment.reason, ...(assessment.acknowledgement ? { acknowledgement: assessment.acknowledgement } : {}),
-    rules: matches.map(match => match.rule_id), audit, ...(name ? { name } : {}) }
+    rules: matches.map(match => match.rule_id), audit, ...(name ? { name } : {}), ...(assessment.project ? { project: assessment.project } : {}) }
 }
 const DEFAULT_RULES = [
   { id: 'copy', name: 'Copy fixes', enabled: true, instruction: 'Explicit requests to correct a typo, wording, punctuation or existing translation. Preserve product promises and business meaning.' },
@@ -67,6 +72,11 @@ const DEFAULT_RULES = [
 export const RuleSchema = z.object({ id: RuleIdSchema, name: z.string().trim().min(1).max(LIMITS.ruleName), enabled: z.boolean(),
   instruction: z.string().trim().min(1).max(LIMITS.ruleInstruction) }).strict()
 export type Rule = z.infer<typeof RuleSchema>
+/** The rule a local installation, which names no repository, adds to the Policy on its first start: requests written in the local inbox are the work. */
+export const LOCAL_RULE: Rule = { id: 'local', name: 'Local requests', enabled: true,
+  instruction: 'Explicit requests written in the local inbox, as the request states them: implement them within the existing conventions of the repository, without expanding the scope, redesigning or adding unrelated behavior.' }
+/** The sender a local installation admits on its first start: the person at this machine, whom the local Source speaks for. */
+export const LOCAL_ALLOWED = [{ id: 'operator', name: 'Operator' }]
 export const RoleModelSchema = z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningEffort: z.string().trim().min(1).optional() }).strict()
 export type RoleModel = z.infer<typeof RoleModelSchema>
 
@@ -87,12 +97,25 @@ export const EvalConfigSchema = z.object({
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
+/**
+ * A project the router may send a ticket to: a name the assessment names, the local directory it works from, and an
+ * optional prepare command that lays out the ticket directory; without one the ticket directory is a git worktree of the
+ * project, or a copy of it.
+ */
+export const ProjectSchema = z.object({
+  name: z.string().trim().regex(/^[a-z][a-z0-9-]{0,39}$/, 'Use lowercase letters, digits and dashes, at most 40 characters'),
+  path: z.string().trim().refine(path => path.startsWith('/'), 'An absolute path'),
+  prepare: z.string().trim().max(LIMITS.prepareCommand).default(''),
+}).strict()
+export type Project = z.infer<typeof ProjectSchema>
 /** Executor settings: worker model, concurrency, ticket directory root (empty defaults to `<stateDir>/work`), `prepare` command, and blocked commands. */
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
   directory: z.string().trim().refine(path => path === '' || path.startsWith('/'), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
+  // The projects the router chooses between; a ticket directory is created under `directory` for the project it names.
+  projects: z.array(ProjectSchema).refine(projects => new Set(projects.map(project => project.name)).size === projects.length, 'Duplicate project names').default([]),
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
 export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}) }).strict()

@@ -42,7 +42,7 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // The Sources' functions take the context; plugin entries and kind callbacks take the host, which builds each kind's context.
-  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
+  const value = { ...parts, masterId: 'orchestrator-test', context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
   const context = sourceContextOf(parts, { kind: 'feishu', health: ['github', 'feishu', 'history'] })
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
   return { ...value, ...context, health, store, engine, commands: parts.commands, receive, executor }
@@ -1094,7 +1094,8 @@ describe('feishu event consumer', () => {
     await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_3'))).toBeDefined(), until)
     expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
     expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
-    expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    // The malformed line is reported once the consumer reaches it, which can follow the last good line by a moment.
+    await vi.waitFor(() => expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') }), until)
     controller.abort(); await running; store.close()
   }, 20_000)
   it('drops the events it reads once the Source is off', async () => {

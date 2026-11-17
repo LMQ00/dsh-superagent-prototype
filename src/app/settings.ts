@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { UserError, type EngineForSettings } from '../core/index.ts'
-import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
+import { EvalConfigSchema, ExecutorConfigSchema, LOCAL_ALLOWED, LOCAL_RULE, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
 import type { SourceHost } from '../sources/host.ts'
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
@@ -105,6 +105,20 @@ export class Settings {
   }
   /** Returns the current validated settings from `Store`. */
   current(): SettingsValue { return this.host.store.settings() }
+  /**
+   * First start of a local installation: it names no repository and no chat transport, so the Policy gains the rule and the
+   * allowed sender its local Source needs. A stored settings revision is the operator's own configuration and is left alone.
+   */
+  async ensureLocalDefaults(local: boolean): Promise<void> {
+    const { store } = this.host
+    if (!local || store.get(KV.settings.revision) !== undefined) return
+    const current = store.settings()
+    if (current.policy.rules.some(rule => rule.id === LOCAL_RULE.id)) return
+    // Both intake kinds a local installation ships speak for the same person, so both lists name that identity.
+    const policy = { ...current.policy, rules: [...current.policy.rules, LOCAL_RULE],
+      sources: { ...current.policy.sources, chat: { allowed: LOCAL_ALLOWED, admission: {} }, local: { allowed: LOCAL_ALLOWED, admission: {} } } }
+    await this.save('policy', policy, store.blockRevision('policy'), 'sync')
+  }
   /**
    * Returns an overview of all settings blocks with their current block revisions: full values for `pause`, `eval`, and
    * `executor`; rule summaries and allowed-sender counts for `policy`; and instance status switches for `sources` (with `read: 'settings/<block>'` paths for full block reads).

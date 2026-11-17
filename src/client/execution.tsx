@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { TICKET_FILTERS, type TicketFilter } from '../app/api.ts'
 import { LIMITS } from '../limits.ts'
 import { usePoll, type SettingsView, type SourceView, type StateView } from './api.ts'
-import { DisclosureRow, Icon, InfoTip, Input, Pill } from './controls.tsx'
+import { Button, DisclosureRow, Icon, InfoTip, Input, Pill } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { usePanel } from './provider.tsx'
 import { TicketLine } from './rows.tsx'
@@ -82,6 +82,9 @@ export function ExecutionSettings() {
     value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean) }))
   const value = draft.value
   const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
+  // A project row keeps every field as text in the draft; only the saved block goes through the schema.
+  const setProject = (index: number, patch: Partial<{ name: string; path: string; prepare: string }>) =>
+    edit({ projects: value.projects.map((item, at) => at === index ? { ...item, ...patch } : item) })
   const prepare = useRef<HTMLTextAreaElement>(null)
   const insert = (key: string) => {
     const field = prepare.current
@@ -100,6 +103,24 @@ export function ExecutionSettings() {
             <Input type="number" min={LIMITS.maxWorkers.min} max={LIMITS.maxWorkers.max} required value={value.maxWorkers}
               onChange={event => edit({ maxWorkers: event.target.value })} />
           </Field>
+          <Section title={t('projects')} count={value.projects.length || undefined} hint={t('projectsIntro')}
+            action={<Button size="sm" icon={<Icon name="plus" />} onClick={() => edit({ projects: [...value.projects, { name: '', path: '', prepare: '' }] })}>{t('projectAdd')}</Button>}>
+            {value.projects.map((project, index) => <div className="dt-form" key={index}>
+              <Field label={t('projectName')} hint={index === 0 ? t('projectNameHint') : undefined}>
+                <Input className="dt-mono" value={project.name} placeholder="webapp" spellCheck={false} required
+                  onChange={event => setProject(index, { name: event.target.value })} />
+              </Field>
+              <Field label={t('projectPath')} hint={index === 0 ? t('projectPathHint') : undefined}>
+                <Input className="dt-mono" value={project.path} placeholder="/home/me/src/webapp" spellCheck={false} pattern="/.*" required
+                  onChange={event => setProject(index, { path: event.target.value })} />
+              </Field>
+              <Field label={t('projectPrepare')} hint={index === 0 ? t('projectPrepareHint') : undefined}>
+                <Input className="dt-mono" value={project.prepare} placeholder={t('projectPrepareEmpty')} spellCheck={false}
+                  onChange={event => setProject(index, { prepare: event.target.value })} />
+              </Field>
+              <Button size="sm" onClick={() => edit({ projects: value.projects.filter((_, at) => at !== index) })}>{t('projectRemove')}</Button>
+            </div>)}
+          </Section>
         </div>
         <div className="dt-form dt-block">
           <h2 className="dt-block-title">{t('term.environment')}<InfoTip text={t('environmentIntro')} /></h2>

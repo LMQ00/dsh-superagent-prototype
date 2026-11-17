@@ -18,6 +18,19 @@ export const teamDefaults = {
   communication: promptFile('team/communication'), scope: promptFile('team/scope'), delivery: promptFile('team/delivery'),
 }
 
+/**
+ * Built-in texts a local installation puts in place of the ones above, which assume a remote with pull requests and a
+ * chat transport: work is committed to the ticket branch only, and user-facing messages are recorded in the panel and
+ * appended to the state directory's outbox.
+ */
+export const localPrompts = {
+  shared: promptFile('local/shared'), orchestrator: promptFile('local/orchestrator'), worker: promptFile('local/worker'),
+  admission: promptFile('local/admission'), subscriptions: promptFile('local/subscriptions'),
+  work: promptFile('local/work'), replies: promptFile('local/replies'), dispatch: promptFile('local/dispatch'),
+  communication: promptFile('local/communication'), delivery: promptFile('local/delivery'),
+  handoff: { orchestrator: promptFile('local/handoff-orchestrator'), worker: promptFile('local/handoff-worker') },
+}
+
 export const mainAdmissionPolicy = promptFile('admission')
 
 const handoff = { shared: promptFile('handoff'), orchestrator: promptFile('handoff-orchestrator'), worker: promptFile('handoff-worker') }

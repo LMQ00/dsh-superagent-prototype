@@ -1,0 +1,15 @@
+# Example profile configuration of a local installation ($DSH_HOME/profiles/<profile>/cordis.patch.yml).
+# Only the main Session is an intake: what the person writes there becomes a request, and the router sends the ticket to one
+# of the projects registered in the Execution settings. No GitHub account or Feishu bot is involved. See LOCAL.md.
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 3082
+- id: dsh-superagent
+  config:
+    stateDir: <absolute path, for example /home/me/.dsh/state/superagent>
+# The local inbox Source, off by default: request files in a directory instead of the conversation.
+# - id: dsh-superagent-local
+#   disabled: false
+#   config:
+#     inbox: /home/me/requests

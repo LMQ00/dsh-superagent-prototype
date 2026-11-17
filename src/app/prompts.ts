@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { UserError, key } from '../core/index.ts'
 import { policyVersion, type Settings, type SettingsOrigin } from '../policy.ts'
-import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
+import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes, localPrompts } from './context.ts'
 import { environmentLines, type Variable } from './execution-environment.ts'
 import { promptsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
@@ -39,7 +39,21 @@ export type PromptConfig = z.infer<typeof PromptConfigSchema>
 export interface PromptVersion { revision: number; previousRevision: number | null; savedAt: string; source: string; config: PromptConfig;
   /** Original unmigrated config preserved when differences cannot be compared across schema versions. */
   legacy?: { config: unknown } }
-export const defaultPrompts = (): PromptConfig => ({ ...teamDefaults, skills: {} })
+/**
+ * The built-in parts a local installation replaces, where the originals assume a remote it can push to and a chat
+ * transport it can send through. A team may still edit or drop them like any other override.
+ */
+const localOverrides = (): NonNullable<PromptConfig['overrides']> => ({
+  'runtime/shared': { text: localPrompts.shared }, 'runtime/orchestrator': { text: localPrompts.orchestrator },
+  'runtime/worker': { text: localPrompts.worker }, 'runtime/admission': { text: localPrompts.admission },
+  'runtime/subscriptions': { text: localPrompts.subscriptions },
+  'runtime/work': { text: localPrompts.work }, 'runtime/replies': { text: localPrompts.replies }, 'runtime/dispatch': { text: localPrompts.dispatch },
+  'runtime/handoff/orchestrator': { text: localPrompts.handoff.orchestrator }, 'runtime/handoff/worker': { text: localPrompts.handoff.worker },
+})
+/** The default prompt configuration; a local installation, which names no repository, gets the local texts above. */
+export const defaultPrompts = (local = false): PromptConfig => local
+  ? { ...teamDefaults, communication: localPrompts.communication, delivery: localPrompts.delivery, skills: {}, overrides: localOverrides() }
+  : { ...teamDefaults, skills: {} }
 
 const ENVIRONMENT_HEADING = 'Execution environment (from this installation\'s settings; it takes precedence over any repository or account named elsewhere in these instructions; an empty value means that part is not configured here). The prepare command of a ticket directory reads the same variables:'
 const POLICY_HEAD = '## Policy\nPolicy version {version}; accept mode {mode}. The accept mode and the rules decide proactive candidates only: an explicit request is routed as dispatch says, in any mode and whatever the rules.'
@@ -135,7 +149,7 @@ export class PromptConflict extends Error {}
 export class Prompts {
   private readonly versions: Versions<PromptVersion>
   constructor(private readonly store: Store, private readonly maxChars: () => number, private readonly environment: () => Variable[] | undefined,
-    private readonly feishu: () => boolean) {
+    private readonly feishu: () => boolean, private readonly local: () => boolean = () => false) {
     this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
@@ -144,12 +158,14 @@ export class Prompts {
   }
   /** Returns skills to register in every Session: built-in Source skills (`feishu` only when a Feishu bot is configured) followed by team skills. */
   skills(config: PromptConfig): [string, string][] {
-    return [...this.feishu() ? ['feishu'] : [], 'github', ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
+    return [...this.feishu() ? ['feishu'] : [], ...this.local() ? [] : ['github'], ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
   }
   current(): PromptVersion {
     const revision = this.versions.revision()
-    return revision ? this.version(revision) : { revision: 0, previousRevision: null, savedAt: '', source: 'defaults', config: defaultPrompts() }
+    return revision ? this.version(revision) : { revision: 0, previousRevision: null, savedAt: '', source: 'defaults', config: this.defaults() }
   }
+  /** The default configuration of this installation, which the panel shows as the text of revision 0. */
+  defaults(): PromptConfig { return defaultPrompts(this.local()) }
   /** Reads a revision by number; revision 0 resolves to built-in defaults before the first save persists it. */
   version(revision: number): PromptVersion {
     const version = this.versions.get(revision) ?? (revision === 0 && this.versions.revision() === 0 ? this.current() : undefined)

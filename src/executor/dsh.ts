@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { existsSync } from 'node:fs'
 import { mkdir, rmdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { key, latestAssignment, latestReport, liveTicket, runningAssignment, threadKey, waitsForPerson } from '../core/index.ts'
@@ -15,6 +16,7 @@ import { Later, type Effects } from '../app/effects.ts'
 import { executionRoot, type Variable } from '../app/execution-environment.ts'
 import type { Sessions } from '../app/sessions.ts'
 import { WorktreeNameSchema } from '../app/assessment.ts'
+import { defaultPrepare } from './project-prepare.ts'
 import { resultRelay } from '../app/notices.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
@@ -97,6 +99,8 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
   stateDir: string): Execution {
   const name = ticketWorktreeName(outcome.name ?? '', ticket.id)
+  // The router names the project a ticket works in; without one the ticket directory sits directly under the work root.
+  const project = outcome.project ? settings.executor.projects.find(item => item.name === outcome.project) : undefined
   const source = ticket.origin.triggerId
   const note = outcome.note ? `\nRouting note (not the source request): ${outcome.note}` : ''
   const ruleIds = ticket.mandate.basis.rules
@@ -104,10 +108,14 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
     .map(rule => `\n- ${rule.name} (${rule.id}): ${rule.instruction}`).join('')
   const precedence = rules ? `\nMatched rules; their procedure and communication instructions take precedence over the default acknowledgement and messaging policy for this ticket:${rules}` : ''
   // The origin trigger is delivered alongside the assignment, so `assignment` omits the trigger text.
-  const assignment = ticket.mandate.strength === 'inferred' && ruleIds
+  const accepted = ticket.mandate.strength === 'inferred' && ruleIds
     ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}`
     : note.trim()
-  return { name, directory: join(executionRoot(settings, stateDir), name), assignment }
+  // A ticket with a project works in a copy of that project; its directory stays under the work root, one level deeper.
+  const projectLine = project ? `Project ${project.name}: this ticket's directory was prepared from ${project.path}.` : ''
+  const assignment = [accepted, projectLine].filter(Boolean).join('\n')
+  return { name, directory: join(executionRoot(settings, stateDir), ...project ? [project.name] : [], name), assignment,
+    ...project ? { project: { name: project.name, path: project.path } } : {} }
 }
 /** Character limits for inline assignment and trigger text in worker messages; longer text is read via its resource. */
 const ASSIGNMENT_CHARS = 1500, TRIGGER_CHARS = 600
@@ -247,7 +255,12 @@ export class DshExecutor implements Executor {
   private async prepareDirectory(ticket: Ticket): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
     await mkdir(dirname(directory), { recursive: true })
-    const command = this.host.store.settings().executor.prepare.trim()
+    const settings = this.host.store.settings()
+    // The project a ticket names may set its own prepare command; without one it gets a worktree or a copy of the project.
+    const project = ticket.execution?.project
+    const registered = project ? settings.executor.projects.find(item => item.name === project.name) : undefined
+    const command = (registered?.prepare ?? settings.executor.prepare).trim()
+      || (registered ? defaultPrepare(registered, directory) : '')
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
     // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
@@ -258,7 +271,8 @@ export class DshExecutor implements Executor {
         throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     await mkdir(directory, { recursive: true })
-    await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
+    // Only a repository carries the git configuration this check refuses; a copied directory has none to read.
+    if (existsSync(join(directory, '.git'))) await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
   }
   /** Enqueues a `launch` effect for an accepted or resumed assignment; launches start in queue order as worker slots free up. */
   start(ticket: Ticket, assignment: Assignment): void {

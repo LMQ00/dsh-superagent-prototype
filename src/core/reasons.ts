@@ -23,6 +23,7 @@ export const REASONS = {
   noRuleMatched: 'No enabled admission rule matched',
   ignoredFromCard: 'Ignored from its card, without a rule assessment',
   observed: 'Observe mode: would accept ({text})',
+  unknownProject: 'The project {project} is not registered in the executor settings',
 } as const
 export type ReasonCode = keyof typeof REASONS
 /** Reason code and template values; `triggerId` identifies the trigger in a batch that the reason applies to. */

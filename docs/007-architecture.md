@@ -362,6 +362,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
 | `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
+| `src/sources/chat.ts` | The chat kind and plugin entry, exported as `./chat-watch`: the person's messages in the main Session as Triggers, one Thread per message, and user-facing messages appended under the state directory's `outbox` |
+| `src/executor/project-prepare.ts` | The prepare command a registered project gets when it sets none: a git worktree on the ticket branch, or a copy of a directory that is not a repository |
+| `src/sources/local.ts` | The local kind and plugin entry, exported as `./local-watch`: request files in an inbox directory as Triggers on a Thread per file, and user-facing messages appended under the state directory's `outbox` |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |
 | `src/sources/github-trigger.ts` | GitHub comments, reviews, Issue bodies and CI changes as Triggers, and GitHub addresses |
 | `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
@@ -436,6 +439,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
 | `tests/deployment.spec.ts`, `tests/environment.spec.ts`, `tests/index.spec.ts` | The plugin configuration and setup, the agent's process environment, the plugin entry |
+| `tests/chat-source.spec.ts` | The chat plugin: the kind it registers, which main-Session messages become requests, and holding one until setup resolves |
+| `tests/project-routing.spec.ts` | The project registry: a ticket's directory under its project, the default prepare command of a worktree or a copy, the variables that name the project, and the chat messages that become requests |
+| `tests/local-mode.spec.ts` | The local build: both role prompts carry no GitHub or Feishu transport, the local delivery text, and the Policy defaults a local installation starts from |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent` against fake `ps`, `tmux` and `dsh` |
 | `tests/client.spec.tsx`, `tests/navigation.spec.ts`, `tests/controls.spec.tsx` | The client plugin's registration and polling, Session navigation and route memory, the local controls, and the panel's imports, which have no cycle |
 | `tests/panel-overview.spec.tsx`, `panel-source.spec.tsx`, `panel-trigger.spec.tsx`, `panel-eval.spec.tsx`, `panel-execution.spec.tsx` | Each page of the panel, against a fake management API answered by route |
