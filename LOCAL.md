@@ -49,7 +49,9 @@ dsh plugin --profile superagent add "link:$PWD"
    - prepare 命令：**留空自动准备** —— git 仓库会为工单开一个工作树 `agent/$DSH_SUPERAGENT_NAME`，非 git 目录直接复制到工单目录；也可以自己写一条命令。
 3. 没有第 3 件：直接在主对话里说需求。
 
-于是：你在主对话说「在 webapp 里把 README 的 recieve 改成 receive」→ 主 Session 收到候选 →
+登记过项目以后，主对话的输入框会多出一个项目选择，选中 `webapp` 就是给这次对话定下目标；也可以不动它，直接在话里点名。
+
+于是：你在主对话说「在 webapp 里把 README 的 recieve 改成 receive」，或者在项目选择里选中 `webapp` 后直接说「把 README 的 recieve 改成 receive」→ 主 Session 收到候选 →
 `orchestrator_route` 接单并点名 `project: webapp` → 工单目录 `<work>/webapp/<工单名>` 从 `/root/src/webapp` 准备 →
 执行器 Session 在那里改、跑检查、提交到 `agent/<名字>` 分支 → `orchestrator_report` 报告 →
 主 Session 把结果写进面板，并追加到 `<stateDir>/outbox/chat.md` → 人自己 review、合并。

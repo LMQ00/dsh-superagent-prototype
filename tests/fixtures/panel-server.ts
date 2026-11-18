@@ -300,6 +300,10 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   } },
   'GET sources': { answer: sourceStatuses },
   'GET settings': { answer: settingsView },
+  'GET conversation': { query: ['session'], answer: ({ query }) => ({ session: query.session ?? '', master: query.session === 'master',
+    selected: null, projects: [] }) },
+  'PUT conversation': { body: true, answer: ({ body }) => ({ session: body.session, master: body.session === 'master',
+    selected: body.project, projects: [] }) },
   'POST sources/:id/labels': { answer: () => {
     // Label refresh failures come from the bot CLI and are returned verbatim.
     if (server.joinError) return refuse(500, server.joinError)

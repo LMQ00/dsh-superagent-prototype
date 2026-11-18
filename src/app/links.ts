@@ -62,12 +62,16 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
     .map(item => ({ trigger_id: trigger.id, ticket_id: item.ticketId, reason: item.reason })))
   // Format the primary trigger like a worker input (including the message it replies to) and summarize earlier batch triggers as cards.
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
+  // The project the person picked for this conversation, when it is still registered.
+  const chosen = primary.meta.project
+  const selected = typeof chosen === 'string' && settings.executor.projects.some(project => project.name === chosen) ? chosen : undefined
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
     ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets),
     ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),
     // The projects an accept may name, so the router picks one instead of inventing a name.
     ...settings.executor.projects.length ? { projects: settings.executor.projects.map(project => ({ name: project.name, path: project.path })) } : {},
+    ...selected ? { selected_project: selected } : {},
     next_action: candidate.strength === 'explicit' ? 'Route it with orchestrator_route as dispatch says: accept, attach, stop or ignore.'
       : 'Ignore it with orchestrator_route if the card shows it touches no enabled rule; else assess it with orchestrator_eval, orchestrator_eval_read, then orchestrator_eval_decide.' }
 }

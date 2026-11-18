@@ -6,6 +6,7 @@ import { apply, chatTrigger } from '../src/sources/chat.ts'
 import type { Assessor, Executor, Trigger } from '../src/core/index.ts'
 import { Engine } from '../src/core/index.ts'
 import { Store } from '../src/app/store.ts'
+import { KV } from '../src/kv.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { HealthBoard } from '../src/infra/health.ts'
@@ -15,7 +16,7 @@ import type { SourceKind } from '../src/sources/kind.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 
 /** A stand-in for the host: it captures the Session listener and the Source context the kind registers against. */
-function host(options: { ready?: Promise<void>; configured?: () => boolean } = {}) {
+function host(options: { ready?: Promise<void>; configured?: () => boolean; project?: string } = {}) {
   const received: Trigger[] = []
   const reported: [string, unknown][] = []
   const described: [string, unknown][] = []
@@ -25,6 +26,7 @@ function host(options: { ready?: Promise<void>; configured?: () => boolean } = {
     report: (entry: string, value: unknown) => { reported.push([entry, value]) },
     receive: async (trigger: Trigger) => { received.push(trigger); return 'stored' as const },
     atomic: <T>(work: () => T): T => work(),
+    state: { get: () => options.project, set: () => {}, keys: () => [] },
     threads: { describe: (key: string, description: unknown) => { described.push([key, description]) } },
   }
   const kinds: string[] = []
@@ -62,6 +64,14 @@ describe('the chat Source plugin', () => {
     expect(h.received).toHaveLength(1)
   })
 
+  it('attaches the project the conversation selected to each request of that conversation', async () => {
+    const h = host({ project: 'webapp' })
+    apply(h.ctx as never)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    h.handlers.get('session/event')!({ id: 'orchestrator-local' }, message('msg-1', 'Fix the README typo.'))
+    expect(h.received[0]?.meta).toMatchObject({ sessionId: 'orchestrator-local', project: 'webapp' })
+  })
+
   it('holds a message that arrives before setup resolves a deployment', async () => {
     const ready = Promise.resolve()
     const h = host({ ready, configured: () => false })
@@ -78,6 +88,7 @@ describe('the chat Source plugin', () => {
 describe('a message in the main Session, through the intake', () => {
   it('becomes a Trigger on its own Thread and a candidate the main Session is asked to assess', async () => {
     const store = new Store(join(mkdtempSync(join(tmpdir(), 'chat-intake-')), 'db.sqlite'))
+    store.set(KV.sessions.project('orchestrator-local'), 'webapp')
     store.saveSettings(SettingsSchema.parse({ eval: { mode: 'auto' }, sources: { chat: { enabled: true, config: {} } },
       policy: { sources: { chat: { allowed: [{ id: 'operator', name: 'Operator' }] } } } }))
     const sources = new SourceRegistry(() => store.settings(), new HealthBoard())
@@ -104,6 +115,7 @@ describe('a message in the main Session, through the intake', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     const trigger = store.triggers.get(chatTrigger('msg-1', 'orchestrator-local', '', '').id)
     expect(trigger?.text).toBe('Add a dark mode to webapp.')
+    expect(trigger?.meta.project).toBe('webapp')
     // A person writing in the main Session is an explicit request, so the gate keeps it and an assessment starts.
     expect(store.threads.get('chat:msg-1')).toMatchObject({ evaluating: { strength: 'explicit' } })
     expect(assessor.request).toHaveBeenCalledTimes(1)

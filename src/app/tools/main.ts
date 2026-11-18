@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
-import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
+import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople, type Trigger }
   from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
@@ -52,7 +52,7 @@ const RouteItemSchema = z.object({
   worktree_name: z.string().nullish().describe(`accept: ${WorktreeNameSchema.description ?? ''}`),
   acknowledgement: z.string().nullish().describe(`accept: one brief sentence of at most ${IM_WORDS} words naming the concrete change and intended result in the source language. It is posted as a reply to the original source on acceptance, so do not quote the source; quote an earlier proposal briefly only when the trigger merely confirms it and the sentence does not already state it. No generic I will handle it.`),
   note: z.string().nullish().describe(`accept and attach: ${RoutingNoteSchema.description ?? ''}`),
-  project: z.string().nullish().describe('accept: the name of a project registered in the executor settings, which decides where this ticket works. Omit when none is registered, and never invent a name.'),
+  project: z.string().nullish().describe('accept: the name of a project registered in the executor settings, which decides where this ticket works. Omit to use the project selected for the conversation; never invent a name.'),
   reason: z.string().nullish().describe('ignore and stop: why, at most 500 characters; an ignore needs it.'),
 }).strict()
 type RouteItem = z.infer<typeof RouteItemSchema>
@@ -67,6 +67,11 @@ const FIELDS: Record<Field, { check: z.ZodType; reads: readonly Kind[]; needs: r
   note: { check: RoutingNoteSchema, reads: ['accept', 'attach'], needs: [] },
   project: { check: z.string().max(40), reads: ['accept'], needs: [] },
   reason: { check: z.string().max(500), reads: ['ignore', 'stop'], needs: ['ignore'] },
+}
+/** The project the person selected for the trigger's conversation, when it is still registered. */
+function selectedProject(trigger: Trigger | undefined, projects: readonly { name: string }[]): string | undefined {
+  const chosen = trigger?.meta.project
+  return typeof chosen === 'string' && projects.some(project => project.name === chosen) ? chosen : undefined
 }
 /** Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. */
 function invalid(item: RouteItem): string | undefined {
@@ -96,12 +101,15 @@ function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string
   switch (item.kind) {
     case 'accept': {
       const before = host.store.triggers.disposition(item.trigger_id)?.decisionId
+      // The accept names a project, or takes the one the person selected for the conversation when it is still registered.
+      const projects = host.store.settings().executor.projects
+      const chosen = item.project ?? selectedProject(host.store.triggers.get(item.trigger_id), projects)
       // A project must be one the settings register: an unknown name would leave the ticket with no directory to prepare.
-      if (item.project && !host.store.settings().executor.projects.some(entry => entry.name === item.project)) {
-        return { refused: `The project ${item.project} is not registered in the executor settings` }
+      if (chosen && !projects.some(entry => entry.name === chosen)) {
+        return { refused: `The project ${chosen} is not registered in the executor settings` }
       }
       const decision = host.engine.decide(item.trigger_id, { kind: 'accept', title: item.title!, scope: item.title!, reason: { code: 'explicitRouted' },
-        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...note, ...item.project ? { project: item.project } : {} })
+        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...note, ...chosen ? { project: chosen } : {} })
       // A Decision that created no ticket is the item's refusal; one that existed before keeps what it was accepted with.
       if (decision.kind !== 'accept' || !decision.ticketId) return { refused: `Ticket was not created: ${reasonText(decision.reason)}` }
       if (decision.id === before) {
