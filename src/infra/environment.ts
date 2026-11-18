@@ -63,6 +63,14 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
   }
 }
 
+/**
+ * The overrides that give a command the operator's own git configuration: the global and system files stay in effect, so the
+ * credential helpers the operator set up answer from their store, and their aliases, filters and proxy settings apply. Both
+ * are tombstones, which drop what `agentVariables` puts in the process environment; prompting stays off, so a missing
+ * credential fails the command instead of leaving it waiting for input.
+ */
+export const operatorGitVariables = (): Record<string, string | undefined> => ({ GIT_CONFIG_GLOBAL: undefined, GIT_CONFIG_NOSYSTEM: undefined })
+
 /** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
@@ -161,7 +169,7 @@ export function commandArgv(argv: string[], platform: NodeJS.Platform = process.
 }
 
 /** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
-export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string>): Promise<string> {
+export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string | undefined>): Promise<string> {
   const handle = subprocess.spawn({ argv: commandArgv(argv), cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
   const { exitCode } = await handle.done
   const read = (reader: SubprocessOutputReader | undefined): string => reader?.readFrom(0).text ?? ''
