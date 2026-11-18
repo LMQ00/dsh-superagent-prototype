@@ -52,6 +52,8 @@ Before the first Assignment, if the Ticket directory does not exist, the prepare
 
 A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request belongs to the Ticket when its branch's last path segment matches the Ticket's short name.
 
+The command runs with the git configuration of the deployment. In a local installation that is the operator's own: a project given as a repository URL clones with the credential helper, stored credentials and SSH keys already set up in `~/.gitconfig` and `~/.git-credentials`, and setup leaves those files as they are. A deployment with an agent account instead gives the command the worker git configuration that setup writes, so the clone acts as the agent account.
+
 ### Concurrency
 
 A Ticket holds a worker slot from the start of a launch, including preparation, or from the delivery that wakes its idle Executor. It also holds the slot throughout an active turn.

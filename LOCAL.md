@@ -74,7 +74,7 @@ dsh plugin --profile superagent add "link:$PWD"
 ## 已知限制
 
 - 不开 PR，所以没有 CI、没有 review 流水线：`ready` 只代表 agent 自检通过。
-- 仓库链接由执行器的 git 克隆：公开仓库直接可用，私有仓库要执行器能非交互取到凭据。
+- 仓库链接由执行器的 git 克隆，凭据来自你本机的 git 配置（`~/.gitconfig` 里的 `credential.helper`、`~/.git-credentials`、SSH 密钥）：公开仓库直接可用，私有仓库你在这台机器上能 `git clone` 的，工单也能。DSH 读这些配置，不往里写东西。
 - 主对话只有一个身份 `operator`，没有多人白名单。
 - 面板上的回复落在面板与 `outbox/chat.md`，不会作为消息再塞回对话。
 - `tests/sources.spec.ts` 里飞书事件消费者那条用例在整包并行跑时偶尔超时（子进程起得慢），单独跑稳定，与本地版改动无关。

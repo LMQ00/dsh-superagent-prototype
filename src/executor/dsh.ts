@@ -9,7 +9,7 @@ import { key, latestAssignment, latestReport, liveTicket, runningAssignment, thr
 import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
-import { runAsWorker, verifyDirectory } from '../infra/environment.ts'
+import { operatorGitVariables, runAsWorker, verifyDirectory } from '../infra/environment.ts'
 import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
@@ -83,6 +83,8 @@ export interface ExecutorHost {
   closing(): boolean
   /** Whether processing is paused, which holds launches and input deliveries. */
   paused(): boolean
+  /** Whether this installation is local, where the operator's own machine runs the workers and holds the project's git credentials. */
+  local(): boolean
   /** Execution environment variables for `ticket`, passed to its workspace prepare command. */
   environment(ticket: Ticket): Variable[]
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
@@ -256,6 +258,9 @@ export class DshExecutor implements Executor {
   /**
    * Runs the configured `executor.prepare` command for a new ticket workspace in its parent directory with the ticket's
    * execution environment variables, then verifies the directory as the worker sees it.
+   * A local installation gives the command the machine's own git configuration, so a project given as a repository URL
+   * clones with the credentials the operator already set up; a deployment with an agent account keeps the worker git
+   * configuration and acts as that account.
    * A failed prepare command throws `PrepareFailed`, which is not retried automatically; a directory this run created is removed, so a
    * later attempt prepares it from scratch rather than starting in a half-made one.
    * @throws PrepareFailed with the command's output when the prepare command fails.
@@ -270,7 +275,10 @@ export class DshExecutor implements Executor {
     const registered = project ? settings.executor.projects.find(item => item.name === project.name) : undefined
     const command = (registered?.prepare ?? settings.executor.prepare).trim()
       || (registered ? defaultPrepare(registered, directory) : '')
-    const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
+    const env = {
+      ...Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value])),
+      ...this.host.local() ? operatorGitVariables() : {},
+    }
     // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
     if (command) await runAsWorker(this.host.context.subprocess, prepareShell(command), dirname(directory), signal, env)

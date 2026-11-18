@@ -1101,6 +1101,29 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   expect(waitsForPerson(runtime.store.tickets.get(failed.ticket.id)!)).toBe(true)
 })
 
+it('gives a local installation\'s prepare command the machine\'s git configuration and keeps the isolated one where an agent account exists', async () => {
+  const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
+  const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; env?: Record<string, string | undefined> }).filter(spec => spec.argv[0] === 'sh')
+  const clone = 'git clone https://github.com/acme/widgets.git "$DSH_SUPERAGENT_DIR"'
+  prepare(clone)
+  await acceptedTicket()
+  // A deployment with an agent account keeps the worker git configuration, so prepare acts as that account.
+  expect(runs()[0]!.env).not.toHaveProperty('GIT_CONFIG_GLOBAL')
+  expect(runs()[0]!.env).not.toHaveProperty('GIT_CONFIG_NOSYSTEM')
+  subprocess.spawn.mockClear()
+  const next = await restart({}, { github: { repository: '', cli: '' } })
+  await next.ready
+  next.store.saveSettings({ ...next.store.settings(), executor: { ...next.store.settings().executor, prepare: clone } })
+  const trigger = feishu('11', '@bot 克隆一下')
+  await receive(trigger, next)
+  await route({ kind: 'accept', trigger_id: trigger.id, title: '克隆仓库', worktree_name: 'clone-repository', acknowledgement: '收到，克隆仓库。' })
+  await runtime.idle()
+  // A local installation's operator holds the project's credentials, so prepare reads their own git configuration.
+  expect(runs()[0]!.env).toHaveProperty('GIT_CONFIG_GLOBAL', undefined)
+  expect(runs()[0]!.env).toHaveProperty('GIT_CONFIG_NOSYSTEM', undefined)
+  expect(runs()[0]!.env).toMatchObject({ DSH_SUPERAGENT_NAME: expect.stringMatching(/^clone-repository/) })
+})
+
 it('counts a ticket whose directory the host prepared before prepare commands existed as prepared', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   await runTool(sessionId, 'orchestrator_report', { state: 'failed', summary: 'offline' })

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, commandArgv, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, commandArgv, credentialHelper, operatorGitVariables, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -116,6 +116,28 @@ describe('agent git configuration', () => {
     await expect(git('-C', 'repo', 'commit', '--allow-empty', '-q', '-m', 'without identity')).rejects.toMatchObject({ stderr: expect.stringContaining('no email was given') })
     await git('-C', 'repo', '-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '--allow-empty', '-q', '-m', 'with identity')
     expect(await git('-C', 'repo', 'log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe('Alice <alice@example.com> / Alice <alice@example.com>')
+  })
+  it('reaches the credentials the operator stored, which the worker git configuration hides, once a local installation restores the operator\'s git configuration', async () => {
+    const home = join(dir, 'home'); mkdirSync(home)
+    // The operator ran `git config --global credential.helper store` and approved a credential once.
+    writeFileSync(join(home, '.gitconfig'), '[credential]\n\thelper = store\n')
+    writeFileSync(join(home, '.git-credentials'), 'https://operator:operator-secret@github.com\n')
+    await writeEnvironment(testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: '/opt/agent tools/gh' } }), [])
+    const env = workerEnv({ PATH: process.env.PATH, HOME: home, ...agentVariables(dir) })
+    const fill = (variables: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> => new Promise(resolve => {
+      const child = spawn('git', ['credential', 'fill'], { cwd: dir, env: { ...env, ...variables } })
+      let stdout = '', stderr = ''
+      child.stdout.on('data', chunk => { stdout += String(chunk) })
+      child.stderr.on('data', chunk => { stderr += String(chunk) })
+      child.on('close', code => resolve({ stdout, stderr, code }))
+      child.stdin?.end('protocol=https\nhost=github.com\n\n')
+    })
+    // A worker keeps the isolated configuration: the operator's helper never answers.
+    await expect(fill({})).resolves.toMatchObject({ stderr: expect.stringContaining('terminal prompts disabled') })
+    await expect(fill({})).resolves.not.toMatchObject({ code: 0 })
+    // Undefined values drop the variables, so git reads the operator's own global configuration again.
+    await expect(fill(operatorGitVariables())).resolves.toMatchObject({ code: 0, stdout: expect.stringContaining('username=operator\n') })
+    await expect(fill(operatorGitVariables())).resolves.toMatchObject({ code: 0, stdout: expect.stringContaining('password=operator-secret\n') })
   })
 })
 
