@@ -143,7 +143,7 @@ export class Sessions {
           return
         }
         if (!agent) return
-        if (preset === ROUTER_PRESET) { if (agent.session.header?.parentSession === undefined && !this.bindings.has(agent)) void this.decorate(agent, true); return }
+        if (preset === ROUTER_PRESET) { if (this.rootAgent(agent) && !this.bindings.has(agent)) void this.decorate(agent, true); return }
         if (this.bindings.get(agent)?.main) this.release(agent, true)
       })
     })
@@ -209,11 +209,14 @@ export class Sessions {
       ? this.bindings.get(agent)?.main === true || this.mainAgent(agent)
       : this.host.store.get(KV.sessions.main(sessionId)) === true
   }
+  /** Whether `agent` is a root Session: not a subagent, and so able to be a main Session. */
+  private rootAgent(agent: Agent): boolean {
+    const header = agent.session.header
+    return agent.id === this.host.masterId || (header?.origin !== 'subagent' && header?.delegationDepth === undefined)
+  }
   /** Whether `agent` is the home Session or a root Session that runs the router preset; a subagent is none, whatever preset its header names. */
   private mainAgent(agent: Agent): boolean {
-    const header = agent.session.header
-    return agent.id === this.host.masterId
-      || (header?.origin !== 'subagent' && header?.delegationDepth === undefined && this.routed(agent))
+    return this.rootAgent(agent) && (agent.id === this.host.masterId || this.routed(agent))
   }
   /**
    * The main Session a message about trigger `triggerId` belongs in: the Session whose conversation started the trigger,

@@ -1769,6 +1769,17 @@ it('takes a Session that selects the main Session preset as a main Session, and 
   runtime.sessions.relay('relay-second', '{"kind":"worker_report"}', trigger.id)
   await runtime.effects.idle('relay')
   expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe('second-main')
+  // A fork created under another preset is adopted when it selects the router preset.
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'fork-later', agentPreset: 'standard' })
+  const later = agents.get('fork-later')! as unknown as { session: { header: Record<string, unknown> } }
+  later.session.header = { parentSession: runtime.masterId, isSeeded: true, agentPreset: 'standard' }
+  await ctx.parallel('agent/created', { agent: later } as never)
+  expect(runtime.isMain('fork-later')).toBe(false)
+  selected.set('fork-later', 'dsh-superagent-router')
+  later.session.header = { parentSession: runtime.masterId, isSeeded: true, agentPreset: 'dsh-superagent-router' }
+  ctx.emit('agent-preset/selected', 'fork-later', 'dsh-superagent-router')
+  await vi.waitFor(() => expect(tools.get('fork-later')?.has('orchestrator_route')).toBe(true))
+  expect(runtime.isMain('fork-later')).toBe(true)
   // A Trigger from a Source with no main Session of its own reports to the home Session.
   runtime.sessions.relay('relay-home', '{"kind":"worker_report"}', feishu('9', '@bot 修一下回归').id)
   await runtime.effects.idle('relay')
