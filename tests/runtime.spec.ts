@@ -1740,6 +1740,43 @@ it('selects its own preset again for a main Session or worker a person switched 
   await expect(presets.select.mock.results[0]!.value).rejects.toMatchObject({ code: 'agent-preset/locked' })
 })
 
+it('takes a Session that selects the main Session preset as a main Session, and answers in the conversation that started the work', async () => {
+  // DSH's preset registry, holding the preset each Session selected.
+  const selected = new Map<string, string>()
+  services.agentPresets = {
+    presetForSession: (session: { id: string; header: { agentPreset?: string } }) => selected.get(session.id) ?? session.header.agentPreset ?? null,
+    select: vi.fn(async (agent: { id: string }, preset: string) => { selected.set(agent.id, preset); return preset }),
+  }
+  await (await restart()).ready
+  const ctx = (runtime as unknown as { ctx: Context }).ctx
+  // The person starts a Session under DSH's default preset and selects the superagent main Session preset before its first turn.
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'second-main', agentPreset: 'standard' })
+  selected.set('second-main', 'dsh-superagent-router')
+  ctx.emit('agent-preset/selected', 'second-main', 'dsh-superagent-router')
+  await vi.waitFor(() => expect(tools.get('second-main')?.has('orchestrator_route')).toBe(true))
+  expect(runtime.isMain('second-main')).toBe(true)
+  expect(runtime.isMain(runtime.masterId)).toBe(true)
+  expect(runtime.isMain('someone-else')).toBe(false)
+  // Work started in that conversation reports there, not to the home Session.
+  const trigger: Trigger = { id: 'chat-second-1', source: 'chat', threads: [{ source: 'chat', id: 'm-1' }], actor: { source: 'chat', id: 'operator' },
+    human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Add a dark mode', meta: { messageId: 'm-1', sessionId: 'second-main' } }
+  runtime.store.triggers.save(trigger)
+  runtime.sessions.relay('relay-second', '{"kind":"worker_report"}', trigger.id)
+  await runtime.effects.idle('relay')
+  expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe('second-main')
+  // A Trigger from a Source with no main Session of its own reports to the home Session.
+  runtime.sessions.relay('relay-home', '{"kind":"worker_report"}', feishu('9', '@bot 修一下回归').id)
+  await runtime.effects.idle('relay')
+  expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
+  // Switching away from the preset before the first turn ends its run as a main Session.
+  selected.set('second-main', 'standard')
+  ctx.emit('agent-preset/selected', 'second-main', 'standard')
+  await vi.waitFor(() => expect(runtime.isMain('second-main')).toBe(false))
+  runtime.sessions.relay('relay-later', '{"kind":"worker_report"}', trigger.id)
+  await runtime.effects.idle('relay')
+  expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
+})
+
 it('gives a subagent of a worker only the worker\'s work tools, and none once the ticket ended', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   // DSH creates the subagent under the standard preset, with the worker's Session as its parent.

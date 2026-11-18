@@ -24,7 +24,7 @@ import type { RegisterTool, Tool } from './tools/tool.ts'
 export interface SessionsHost {
   /** DSH Cordis context: sessions, agents, persistence, and their events. */
   readonly context: Context
-  readonly store: Pick<Store, 'tickets' | 'settings' | 'get' | 'set' | 'keys'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'settings' | 'get' | 'set' | 'keys'>
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'compose' | 'skills'>
   readonly effects: Pick<Effects, 'enqueue' | 'handle' | 'idle' | 'pending'>
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
@@ -42,7 +42,14 @@ export interface SessionsHost {
  * What Sessions registered for an agent it decorated: the releases of its prompt section, tools and skill scope, the scope
  * its skills are registered in, and the skills of one prompt revision; for a worker's subagent, only its tool limits.
  */
-interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { revision: number; dispose: () => void }; subagent?: true }
+interface SessionBinding {
+  disposers: (() => void)[]
+  scope?: Context
+  skills?: { revision: number; dispose: () => void }
+  /** Decorated as a main Session, whether the home one or one that runs the router preset. */
+  main?: true
+  subagent?: true
+}
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
 export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
@@ -101,8 +108,8 @@ export class Sessions {
     this.ctx = host.context
     this.agentDelivery = new AgentDelivery(host.context)
     // Deliver relays and notices to the main Session in the order they were queued.
-    host.effects.handle('relay', ({ text }, requestId) => this.prompt(host.masterId, requestId, text, 'steer'), { ordered: true })
-    host.effects.handle('notice', ({ value, summary }, name) => this.inject(name, value, summary), { ordered: true })
+    host.effects.handle('relay', ({ text, trigger }, requestId) => this.prompt(this.mainFor(trigger), requestId, text, 'steer'), { ordered: true })
+    host.effects.handle('notice', ({ value, summary, trigger }, name) => this.inject(name, value, summary, trigger), { ordered: true })
   }
   /** Subscribes to host agent and session events so newly created sessions are decorated and model-budget retries are reflected in health. Call once at startup. */
   install(): void {
@@ -119,15 +126,23 @@ export class Sessions {
       this.updateModelHealth()
     })
     ctx.on('agent/created', async ({ agent }) => { await this.decorate(agent); return undefined })
-    // Opening a Session in DSH's Web UI before its first turn may select the default preset for it: select ours again. After
-    // its first turn DSH refuses any selection, which leaves it as it is.
+    // The home Session and the Executor Sessions keep the preset this installation gives them, also when a Web UI session
+    // starts on DSH's default preset. Any other Session becomes a main Session when it selects the router preset, and one that
+    // selects another preset before its first turn stops being one.
     ctx.inject(['agentPresets'], child => {
       child.on('agent-preset/selected', (sessionId, preset) => {
-        const ticketId = ticketOfSession(sessionId), agent = ctx.agents.get(sessionId as SessionId)
-        const ours = sessionId === this.host.masterId ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
-        if (!ours || preset === ours || !agent) return
-        const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
-        presets.select(agent, ours).catch(() => {})
+        const home = sessionId === this.host.masterId, agent = ctx.agents.get(sessionId as SessionId)
+        const ticketId = home ? undefined : ticketOfSession(sessionId)
+        const ours = home ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
+        if (ours) {
+          if (!agent || preset === ours) return
+          const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
+          presets.select(agent, ours).catch(() => {})
+          return
+        }
+        if (!agent) return
+        if (preset === ROUTER_PRESET) { if (!this.bindings.has(agent)) void this.decorate(agent, true); return }
+        if (this.bindings.get(agent)?.main) this.release(agent)
       })
     })
     ctx.on('agent/status', ({ agent, status }) => {
@@ -170,18 +185,34 @@ export class Sessions {
   }
   /** The id of the message `prompt` delivers under `requestId`, which DSH's inbox events name it by. */
   promptedId(requestId: string): MessageId { return messageId(key(requestId)) }
-  /** Enqueues a steering relay to the main Session; relays are durable and retried by `Effects` until delivered, at most once per `requestId`. */
-  relay(requestId: string, text: string): void { this.host.effects.enqueue('relay', requestId, { text }) }
-  /** Enqueues a durable background notice for injection into the main Session; a new notice with the same `name` replaces a still-waiting notice of that `name`. */
-  notify(name: string, value: Record<string, unknown>, summary: string): void { this.host.effects.enqueue('notice', name, { value, summary }) }
+  /** Whether `sessionId` is a main Session: the home Session, or any Session that runs the router preset. */
+  isMain(sessionId: string): boolean {
+    if (sessionId === this.host.masterId) return true
+    const agent = this.ctx.agents.get(sessionId as SessionId)
+    return !!agent && (this.bindings.get(agent)?.main === true || this.routed(agent))
+  }
+  /**
+   * The main Session a message about trigger `triggerId` belongs in: the Session whose conversation started the trigger,
+   * while that Session still runs as a main Session, else the home Session.
+   */
+  mainFor(triggerId?: string): string {
+    const origin = triggerId === undefined ? undefined : this.host.store.triggers.get(triggerId)?.meta.sessionId
+    return typeof origin === 'string' && this.isMain(origin) ? origin : this.host.masterId
+  }
+  /** Enqueues a steering relay to the main Session of trigger `trigger`; relays are durable and retried by `Effects` until delivered, at most once per `requestId`. */
+  relay(requestId: string, text: string, trigger?: string): void { this.host.effects.enqueue('relay', requestId, { text, ...trigger ? { trigger } : {} }) }
+  /** Enqueues a durable background notice for injection into the main Session of trigger `trigger`; a new notice with the same `name` replaces a still-waiting notice of that `name`. */
+  notify(name: string, value: Record<string, unknown>, summary: string, trigger?: string): void {
+    this.host.effects.enqueue('notice', name, { value, summary, ...trigger ? { trigger } : {} })
+  }
   /** Waits for currently runnable `notice` effects to settle and returns `'injected'` if notice `name` has reached the main Session or `'pending'` if it is still queued. */
   async delivery(name: string): Promise<'injected' | 'pending'> {
     await this.host.effects.idle('notice')
     return this.host.effects.pending('notice', name) ? 'pending' : 'injected'
   }
-  /** Injects a notice into the main Session without waking it; no-op if the main Session does not exist yet. */
-  private async inject(name: string, value: Record<string, unknown>, summary: string): Promise<void> {
-    const resolved = await this.ctx.sessionController.resolveAgent(this.host.masterId as SessionId)
+  /** Injects a notice into the main Session of trigger `trigger` without waking it; no-op if that Session does not exist yet. */
+  private async inject(name: string, value: Record<string, unknown>, summary: string, trigger?: string): Promise<void> {
+    const resolved = await this.ctx.sessionController.resolveAgent(this.mainFor(trigger) as SessionId)
     if ('error' in resolved) return
     // Deduplicate by notice name and payload hash so retries are idempotent while updated payloads still deliver.
     const text = JSON.stringify(value)
@@ -232,13 +263,12 @@ export class Sessions {
     const ticketId = ticketOfSession(agent.id)
     return ticketId === undefined ? undefined : this.host.store.tickets.get(ticketId)
   }
-  private async decorate(agent: Agent): Promise<void> {
+  private async decorate(agent: Agent, main = agent.id === this.host.masterId || this.routed(agent)): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
-    const master = agent.id === host.masterId
-    const ticket = master ? undefined : this.ticketOf(agent)
-    if (!master && !ticket) { this.limitSubagent(agent); return }
-    const binding: SessionBinding = { disposers: [] }
+    const ticket = main ? undefined : this.ticketOf(agent)
+    if (!main && !ticket) { this.limitSubagent(agent); return }
+    const binding: SessionBinding = { disposers: [], ...main ? { main: true as const } : {} }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
@@ -247,9 +277,9 @@ export class Sessions {
     binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
       const version = this.promptFor(agent, context.signal !== undefined)
       const current = ticket && host.store.tickets.get(ticket.id)
-      const composed = host.prompts.compose(version.config, master ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined)
+      const composed = host.prompts.compose(version.config, main ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined)
       return `[dsh-superagent prompt revision ${version.revision}]\n${composed}\n${current ? mandateInstructions(current.mandate) : ''}`
-    }, ...(master ? { complete: true } : {}) }))
+    }, ...(main ? { complete: true } : {}) }))
     // A recreated skill scope (e.g. after the skills service restarts) starts empty, so reset `binding.skills` before rebinding.
     const skillScope = agent.ctx.inject(['skills'], scope => {
       binding.scope = scope
@@ -262,7 +292,7 @@ export class Sessions {
     if (this.bindings.get(agent) !== binding) return
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
-    if (master) {
+    if (main) {
       binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
     } else {

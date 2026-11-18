@@ -16,7 +16,7 @@ import type { SourceKind } from '../src/sources/kind.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 
 /** A stand-in for the host: it captures the Session listener and the Source context the kind registers against. */
-function host(options: { ready?: Promise<void>; configured?: () => boolean; project?: string } = {}) {
+function host(options: { ready?: Promise<void>; configured?: () => boolean; project?: string; main?: string[] } = {}) {
   const received: Trigger[] = []
   const reported: [string, unknown][] = []
   const described: [string, unknown][] = []
@@ -34,7 +34,8 @@ function host(options: { ready?: Promise<void>; configured?: () => boolean; proj
   const ctx = {
     on: (name: string, handler: (session: unknown, event: unknown) => void) => { handlers.set(name, handler); return () => handlers.delete(name) },
     effect: (effect: () => unknown) => { effect() },
-    orchestrator: { masterId: 'orchestrator-local', sources: { register: (kind: { kind: string }) => { kinds.push(kind.kind); return () => {} } },
+    orchestrator: { masterId: 'orchestrator-local', isMain: (id: string) => id === 'orchestrator-local' || options.main?.includes(id) === true,
+      sources: { register: (kind: { kind: string }) => { kinds.push(kind.kind); return () => {} } },
       context: () => source },
   }
   return { ctx, handlers, received, reported, described, kinds }
@@ -61,6 +62,19 @@ describe('the chat Source plugin', () => {
     listener(main, { type: 'assistant/message', data: { id: 'msg-3' } })
     listener(main, message('msg-4', 'a notice from dsh-superagent', { kind: 'dsh-superagent', form: 'notice' }))
     listener(main, { type: 'user/message', data: { id: 'msg-5', role: 'user', content: [{ type: 'image' }], source: { kind: 'user' } } })
+    expect(h.received).toHaveLength(1)
+  })
+
+  it('takes requests from a Session that runs the main Session preset, and from no other', async () => {
+    const h = host({ main: ['second-main'] })
+    apply(h.ctx as never)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const listener = h.handlers.get('session/event')!
+    listener({ id: 'second-main' }, message('msg-1', 'Ship the changelog.'))
+    expect(h.received.map(trigger => trigger.text)).toEqual(['Ship the changelog.'])
+    expect(h.received[0]?.meta).toMatchObject({ sessionId: 'second-main' })
+    // A Session that runs another preset is not a main Session.
+    listener({ id: 'someone-else' }, message('msg-2', 'a stranger'))
     expect(h.received).toHaveLength(1)
   })
 
@@ -104,7 +118,8 @@ describe('a message in the main Session, through the intake', () => {
     const ctx = {
       on: (name: string, handler: (session: unknown, event: unknown) => void) => { handlers.set(name, handler); return () => {} },
       effect: (effect: () => unknown) => { effect() },
-      orchestrator: { masterId: 'orchestrator-local', sources: { register: (kind: SourceKind) => sources.register(kind) },
+      orchestrator: { masterId: 'orchestrator-local', isMain: (id: string) => id === 'orchestrator-local',
+        sources: { register: (kind: SourceKind) => sources.register(kind) },
         context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(deps, kind) },
     }
     apply(ctx as never)

@@ -82,7 +82,7 @@ export function apply(ctx: Context): void {
       source.report('chat', health('ready', 'chatSession'))
     }).catch(() => { /* A source whose setup never resolves reports nothing. */ })
     const listener = ctx.on('session/event', (session, event) => {
-      if (event.type !== 'user/message' || session.id !== ctx.orchestrator.masterId) return
+      if (event.type !== 'user/message' || !ctx.orchestrator.isMain(String(session.id))) return
       const message = event.data
       if (message.role !== 'user' || ownMessage(message.source)) return
       const text = messageText(message)

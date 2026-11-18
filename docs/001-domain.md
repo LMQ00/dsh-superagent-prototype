@@ -77,7 +77,7 @@ A reference list of the terms this and the later documents use, with their Chine
 | Term | 中文 | Meaning |
 | --- | --- | --- |
 | Agent | 智能体 | The automated team member dsh-superagent runs, acting on Sources through identities such as a GitHub account and a Feishu bot |
-| Main Session | 主 Session | The DSH Session that evaluates Triggers, accepts and dispatches Tickets, and replies; `orchestrator` in code and prompts |
+| Main Session | 主 Session | A DSH Session that runs the superagent main Session preset (`dsh-superagent-router`), evaluates Triggers, accepts and dispatches Tickets, and replies; `orchestrator` in code and prompts. The installation creates the home one at startup |
 | Executor Session | 执行器 Session | The DSH Session an Executor runs for one Ticket; `worker` in code and prompts |
 | Source | 来源 | A stream of events: a kind that a plugin provides, plus one instance configuration |
 | Trigger | 触发 | One immutable event from a Source |

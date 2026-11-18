@@ -52,6 +52,27 @@ it('answers each kind of failure with its own status', async () => {
   expect(await call('POST', 'executor/pause', 'not json')).toEqual({ status: 400, body: { error: 'The request body is not JSON' } })
 })
 
+it('lets any main Session take the conversation project, and no other', async () => {
+  const saved: [string, string | null][] = []
+  const values = new Map<string, string>()
+  const call = serve({
+    masterId: 'home',
+    sessions: { isMain: (id: string) => id === 'home' || id === 'second' },
+    store: { settings: () => SettingsSchema.parse({ executor: { projects: [{ name: 'webapp', path: '/srv/webapp' }] } }),
+      get: (key: string) => values.get(key), set: (key: string, value: string) => { saved.push([key, value]); values.set(key, value) },
+      delete: () => {} },
+  })
+  // A Session that runs the main Session preset is a main Session, like the home one.
+  expect(await call('GET', 'conversation?session=second')).toMatchObject({ status: 200, body: { session: 'second', master: true, selected: null } })
+  expect(await call('PUT', 'conversation', { session: 'second', project: 'webapp' }))
+    .toMatchObject({ status: 200, body: { master: true, selected: 'webapp' } })
+  expect(saved).toEqual([['session-project:second', 'webapp']])
+  // A worker Session takes no requests.
+  expect(await call('GET', 'conversation?session=worker-t1')).toMatchObject({ status: 200, body: { master: false } })
+  expect(await call('PUT', 'conversation', { session: 'worker-t1', project: 'webapp' }))
+    .toEqual({ status: 400, body: { error: 'Only the main Session takes requests' } })
+})
+
 it('decodes path parameters and parses each route\'s query', async () => {
   const seen: unknown[] = []
   const call = serve({

@@ -35,7 +35,7 @@ export interface HttpHost {
   readonly sourceLinks: Pick<TextCache, 'entries'>
   readonly sources: SourceRegistry
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged' | 'defaults'>
-  readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
+  readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'isMain'>
   readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels'>
   readonly engine: EngineForPeople
   readonly executor: Pick<DshExecutor, 'activeCount'>
@@ -155,7 +155,7 @@ export function conversationView(runtime: HttpHost, session: string) {
   const projects = runtime.store.settings().executor.projects.map(({ name, path }) => ({ name, path }))
   const chosen = runtime.store.get(KV.sessions.project(session))
   const selected = chosen && projects.some(project => project.name === chosen) ? chosen : null
-  return { session, master: session === runtime.masterId, selected, projects }
+  return { session, master: runtime.sessions.isMain(session), selected, projects }
 }
 
 function routes(runtime: HttpHost): Routes {
@@ -172,7 +172,7 @@ function routes(runtime: HttpHost): Routes {
     'GET conversation': ({ query }) => conversationView(runtime, ConversationQuery.parse(query).session),
     'PUT conversation': async ({ body }) => {
       const { session, project } = ConversationPick.parse(await body())
-      if (session !== runtime.masterId) throw new RouteError(400, 'Only the main Session takes requests')
+      if (!runtime.sessions.isMain(session)) throw new RouteError(400, 'Only the main Session takes requests')
       if (project !== null && !store.settings().executor.projects.some(item => item.name === project)) {
         throw new RouteError(400, `The project ${project} is not registered in the executor settings`)
       }
