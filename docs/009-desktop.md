@@ -27,10 +27,10 @@ The steps here are for the macOS application. The worker environment dsh-superag
    ```sh
    cd <checkout>
    pnpm install && pnpm build
-   dsh plugin --profile desktop add "link:$PWD"
+   node scripts/install.mjs
    ```
 
-   A `dsh` installed from npm cannot change this profile. When both are on `PATH`, run the application's command, or put it first.
+   Run from a session in the application, the script reads `DSH_PROFILE` and installs into `desktop`. From a terminal outside it, name the profile: `node scripts/install.mjs --profile desktop`. The script runs `dsh`, so the application's command (**Manage dsh Command…**) must be first on `PATH`; a `dsh` installed from npm cannot change this profile.
 
 3. Add the state directory to the profile's patch file, `$DSH_HOME/profiles/desktop/cordis.patch.yml`:
 
