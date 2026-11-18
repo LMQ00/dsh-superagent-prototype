@@ -71,6 +71,16 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
  */
 export const operatorGitVariables = (): Record<string, string | undefined> => ({ GIT_CONFIG_GLOBAL: undefined, GIT_CONFIG_NOSYSTEM: undefined })
 
+/**
+ * The overrides a local installation applies to its own process environment: `agentVariables` with the worker git
+ * configuration and the prompting switches dropped, so every Session's git reads the operator's global configuration and
+ * answers with the credentials the operator stored. The remaining tombstones stand: the host's repository location and
+ * identity variables, the stripped tokens, and the shim directory `applyEnvironment` adds to PATH.
+ */
+export const localProcessVariables = (variables: Record<string, string | undefined>): Record<string, string | undefined> => ({
+  ...variables, GIT_CONFIG_GLOBAL: undefined, GIT_CONFIG_NOSYSTEM: undefined, GIT_ASKPASS: undefined, GIT_TERMINAL_PROMPT: undefined,
+})
+
 /** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
