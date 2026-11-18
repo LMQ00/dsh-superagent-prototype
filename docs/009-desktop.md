@@ -40,7 +40,7 @@ The steps here are for the macOS application. The worker environment dsh-superag
        stateDir: <absolute path>
    ```
 
-   An existing installation's state directory keeps its Tickets, settings and prompt history; a new directory starts empty.
+   An existing installation's state directory keeps its Tickets, settings and prompt history; a new directory starts empty. A Windows host names a drive or UNC path here, such as `C:\Users\me\.dsh\state\superagent`.
 
 4. Open the application. **Superagent** in the sidebar opens the panel. Overview lists what setup still needs, and the Settings pages work as in [006 Deployment](006-deployment.md).
 
@@ -55,6 +55,31 @@ Setup works as it does in a CLI profile: it verifies the repository and the agen
 The application passes the account's environment to its Host, so a CLI on `PATH` in a terminal is found here too. A CLI outside `PATH` goes into the Source settings as an absolute path.
 
 A setup check or an account change restarts dsh-superagent inside the running application. The application and its other Sessions stay up.
+
+## Windows
+
+The application, the profile and the panel need nothing else on Windows. These details differ:
+
+- `stateDir` is a drive or UNC path, and the panel's Deployment page shows it as written.
+- The command shims in `<stateDir>\worker-bin` are `.cmd` files, which cmd and PowerShell find through `PATHEXT`. A wrapper for the agent's GitHub account is a `.cmd` file too:
+
+  ```bat
+  @echo off
+  set "GH_CONFIG_DIR=%USERPROFILE%\.config\gh-agent"
+  gh %*
+  ```
+
+  The wrapper calls `gh` by name: the shim removes its own directory from `PATH` first, so the call reaches the installed CLI.
+- The plugin starts a `.cmd` CLI through `cmd.exe`, and the git credential helper Git for Windows runs is a shell function over the same absolute path.
+- A Ticket's prepare command runs in Windows PowerShell. It reads the execution variables as `$env:NAME` and separates commands with `;` or a newline:
+
+  ```powershell
+  $head = if ($env:DSH_SUPERAGENT_GITHUB_PR_HEAD) { $env:DSH_SUPERAGENT_GITHUB_PR_HEAD } else { 'HEAD' }
+  git -C C:\src\widgets fetch --no-tags "https://github.com/$env:DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${head}:refs/dsh-superagent/$env:DSH_SUPERAGENT_TICKET"
+  git -C C:\src\widgets worktree add -b "agent/$env:DSH_SUPERAGENT_NAME" "$env:DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$env:DSH_SUPERAGENT_TICKET"
+  ```
+
+`scripts/dsh-superagent` is a POSIX script and does not run on Windows; the application starts and stops the Host itself.
 
 ## Management API
 
@@ -91,5 +116,6 @@ Updating the application installs a new DeepSeek Harness runtime. dsh-superagent
 | The log says the configuration needs `stateDir` | Add the entry of Install step 3 and open the application again |
 | **Superagent** is missing from the sidebar, and the log says the state directory's lock is held | Another Host uses the same state directory; stop the CLI profile's service, or give this installation a directory of its own |
 | `dsh plugin --profile desktop` reports that the profile is reserved | An npm-installed `dsh` cannot manage this profile; run the command the application installs |
-| Setup cannot find `gh` | Set the agent CLI's absolute path on the GitHub Source card |
+| Setup cannot find `gh` | Set the agent CLI's absolute path on the GitHub Source card; on Windows, point it at the `.exe` or the `.cmd` wrapper |
+| A Ticket fails with `The prepare command failed` on Windows | The prepare command runs in Windows PowerShell; use `$env:NAME` and `;` or a newline between commands |
 | The panel shows "Failed to load plugins" after the application updates | Quit the application and open it again, then reload |

@@ -20,7 +20,13 @@ export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bi
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
 const gitQuote = (value: string): string => `"${value.replace(/[\\"]/g, char => `\\${char}`)}"`
-export const credentialHelper = (cli: string): string => `!${shellQuote(cli)} auth git-credential`
+/**
+ * The git credential helper that asks the agent's CLI for credentials.
+ * Git for Windows runs a `!` helper through its POSIX shell, so the path uses forward slashes and a shell function keeps the arguments.
+ */
+export const credentialHelper = (cli: string, platform: NodeJS.Platform = process.platform): string => platform === 'win32'
+  ? `!f() { "${cli.replaceAll('\\', '/').replaceAll('"', '\\"')}" auth git-credential "$@"; }; f`
+  : `!${shellQuote(cli)} auth git-credential`
 
 export function sameDirectory(a: string, b: string): boolean {
   const real = (path: string): string => { try { return realpathSync(path) } catch { return resolve(path) } }
@@ -60,7 +66,8 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
 /** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
-  const head = (await readFile(file, 'utf8')).split('\n', 2)
+  // A batch shim prefixes the marker with `rem ` and ends its lines with CRLF.
+  const head = (await readFile(file, 'utf8')).split('\n', 2).map(line => line.replace(/\r$/, '').replace(/^(?:rem |::)/i, ''))
   return [MARKER, ...LEGACY_MARKERS].some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
@@ -74,29 +81,40 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
 
 /**
  * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
- * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
+ * Each shim strips the shim directory from PATH before running so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
+ * POSIX hosts get shell scripts; Windows gets `.cmd` batch shims, which cmd and PowerShell resolve through `PATHEXT`.
  */
-export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
+export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[],
+  platform: NodeJS.Platform = process.platform): Promise<void> {
   const { stateDir, repository, github, feishu } = deployment
   const dir = workerBin(stateDir)
+  const windows = platform === 'win32'
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
   for (const name of before) { const file = join(dir, name); if (!await written(file)) throw new SetupError('foreignFile', { file }) }
   // Workers may be running concurrently: write each shim to a temp file and atomically rename it so no command ever resolves past the shim directory.
   const kept = new Set<string>()
   const shim = async (name: string, body: string): Promise<void> => {
-    const temporary = join(dir, `.${name}.${process.pid}.tmp`)
-    await writeFile(temporary, `#!/bin/sh\n${MARKER}\n${body}\n`, { mode: 0o755 })
-    await rename(temporary, join(dir, name))
-    kept.add(name)
+    const file = windows ? `${name}.cmd` : name
+    const text = windows ? `@echo off\r\nrem ${MARKER}\r\n${body}\r\n` : `#!/bin/sh\n${MARKER}\n${body}\n`
+    const temporary = join(dir, `.${file}.${process.pid}.tmp`)
+    await writeFile(temporary, text, { mode: windows ? 0o644 : 0o755 })
+    await rename(temporary, join(dir, file))
+    kept.add(file)
   }
   const withoutShims = [
     `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
     'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
     'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
   ].join('\n')
-  const run = (program: string): string => `${withoutShims}\nexec ${shellQuote(program)} "$@"`
-  const fail = (message: string): string => `echo ${shellQuote(message)} >&2\nexit 1`
+  const withoutShimsCmd = [
+    'setlocal',
+    `set "PATH=%PATH:${dir};=%"`,
+    `set "PATH=%PATH:;${dir}=%"`,
+    `set "PATH=%PATH:${dir}=%"`,
+  ].join('\r\n')
+  const run = (program: string): string => windows ? `${withoutShimsCmd}\r\n"${program}" %*` : `${withoutShims}\nexec ${shellQuote(program)} "$@"`
+  const fail = (message: string): string => windows ? `>&2 echo ${message}\r\nexit /b 1` : `echo ${shellQuote(message)} >&2\nexit 1`
   await shim('gh', run(github.cli))
   await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
@@ -108,7 +126,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     // Make git refuse to commit without an explicit identity set by the worker instead of guessing from the operator's OS user.
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
-    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
+    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli, platform))}`,
     '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
     // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
@@ -124,9 +142,23 @@ export function applyEnvironment(variables: Record<string, string | undefined>, 
   return () => { apply(previous) }
 }
 
+/** Quote one argument for a `cmd.exe` command line; characters cmd would otherwise split on go inside double quotes. */
+const cmdQuote = (value: string): string => /[\s"&|<>^()]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+/**
+ * The process a command name starts on this host.
+ * Windows cannot start a `.cmd` or `.bat` file directly, so a batch wrapper runs through `cmd.exe /d /s /c` with its arguments quoted.
+ * @param argv - program and arguments.
+ * @param platform - the host platform.
+ * @param comspec - the command interpreter to use on Windows; `cmd.exe` by default.
+ */
+export function commandArgv(argv: string[], platform: NodeJS.Platform = process.platform, comspec = process.env.ComSpec ?? 'cmd.exe'): string[] {
+  if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(argv[0] ?? '')) return argv
+  return [comspec, '/d', '/s', '/c', [argv[0]!, ...argv.slice(1)].map(cmdQuote).join(' ')]
+}
+
 /** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
 export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string>): Promise<string> {
-  const handle = subprocess.spawn({ argv, cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
+  const handle = subprocess.spawn({ argv: commandArgv(argv), cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
   const { exitCode } = await handle.done
   const read = (reader: SubprocessOutputReader | undefined): string => reader?.readFrom(0).text ?? ''
   if (exitCode === 0) return read(handle.collected.stdout)
@@ -135,11 +167,17 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
 }
 
 /** Verifies that worker git invocations resolve the deployment's GitHub credential helper. */
-export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
+export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal,
+  platform: NodeJS.Platform = process.platform): Promise<void> {
   const { github, stateDir } = deployment
   // `-z` separates fields with NUL and never quotes paths.
   const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
-  if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')
+  // Git for Windows writes the origin with forward slashes; the comparison ignores separator spelling and case there.
+  const same = (left: string, right: string): boolean => platform === 'win32'
+    ? left.replaceAll('\\', '/').toLowerCase() === right.replaceAll('\\', '/').toLowerCase() : left === right
+  const [origin, helper, extra] = helpers
+  if (extra !== '' || !same(origin ?? '', `file:${workerGitConfig(stateDir)}`) || !same(helper ?? '', credentialHelper(github.cli, platform)))
+    throw new SetupError('gitTooOld')
 }
 
 /**

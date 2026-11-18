@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, commandCandidates, configSchema, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
@@ -83,7 +83,20 @@ describe('setup', () => {
     await needs('github', 'agentCliNoAccount', {}, { repository, cli: program(join(dir, 'bin', 'gh-anonymous'), `echo '{}'`) })
     expect(() => executable('nothing-here', join(dir, 'bin'))).toThrow('nothing-here is not an executable file on PATH')
   })
-  it('reads the Feishu bot from a bot-only lark-cli, or finds none when the Feishu Source names no CLI', async () => {
+  it('accepts a Windows state directory and finds a Windows CLI through PATHEXT', () => {
+  expect(configSchema('win32')({ stateDir: 'C:\\Users\\me\\.dsh\\state' }).stateDir).toBe('C:\\Users\\me\\.dsh\\state')
+  expect(configSchema('win32')({ stateDir: 'C:/Users/me/.dsh/state' }).stateDir).toBe('C:/Users/me/.dsh/state')
+  expect(configSchema('win32')({ stateDir: '\\\\server\\share\\state' }).stateDir).toBe('\\\\server\\share\\state')
+  expect(() => configSchema('win32')({ stateDir: '/home/me/.dsh/state' })).toThrow()
+  expect(() => configSchema('linux')({ stateDir: 'C:\\Users\\me' })).toThrow()
+  expect(configSchema('linux')({ stateDir: '/home/me/.dsh/state' }).stateDir).toBe('/home/me/.dsh/state')
+  expect(commandCandidates('gh', 'C:\\bin;D:\\tools', 'win32', '.EXE;.CMD')).toEqual([
+    'C:\\bin\\gh', 'C:\\bin\\gh.EXE', 'C:\\bin\\gh.CMD', 'D:\\tools\\gh', 'D:\\tools\\gh.EXE', 'D:\\tools\\gh.CMD'])
+  // A name with an extension is tried once, and a relative path with a separator is refused.
+  expect(commandCandidates('gh.cmd', 'C:\\bin', 'win32', '.EXE;.CMD')).toEqual(['C:\\bin\\gh.cmd'])
+  expect(() => commandCandidates('bin\\gh', 'C:\\bin', 'win32')).toThrow('bin\\gh must be a command name or an absolute path')
+})
+it('reads the Feishu bot from a bot-only lark-cli, or finds none when the Feishu Source names no CLI', async () => {
     expect(await resolveFeishuBot(machine(), {}, probe, path)).toBeUndefined()
     expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: join(dir, 'bin', 'lark-cli'), appId: 'cli_bot', brand: 'lark', botId: 'ou_bot', name: 'Widgets Bot' })
     const refuses = async (code: string, values: Record<string, unknown> = {}) => expect(resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).rejects.toEqual(setupError('feishu', code, values))

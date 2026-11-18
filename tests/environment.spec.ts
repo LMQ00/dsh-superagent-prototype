@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, commandArgv, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -61,6 +61,29 @@ describe('worker shims', () => {
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${workerGitConfig(dir)} was not written by dsh-superagent`)
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toBe('[user]\n\tname = someone\n')
   })
+  it('writes batch shims and a helper git can run on Windows', async () => {
+    const base = testDeployment()
+    const cli = 'C:\\Program Files\\GitHub CLI\\gh-agent.cmd'
+    await writeEnvironment(testDeployment({ stateDir: dir, github: { ...base.github, cli }, feishu: undefined }), ['personal-gh'], 'win32')
+    const bin = workerBin(dir)
+    expect(readdirSync(bin).sort()).toEqual(['gh.cmd', 'lark-cli.cmd', 'personal-gh.cmd'])
+    const gh = readFileSync(join(bin, 'gh.cmd'), 'utf8')
+    expect(gh).toContain('rem # Written by dsh-superagent')
+    expect(gh).toContain('setlocal')
+    // A wrapper that calls `gh` by name must not reach this shim again.
+    expect(gh).toContain(`set "PATH=%PATH:${bin};=%"`)
+    expect(gh).toContain(`"${cli}" %*`)
+    expect(readFileSync(join(bin, 'lark-cli.cmd'), 'utf8')).toContain('lark-cli is unavailable: this installation has no Feishu bot.')
+    expect(readFileSync(join(bin, 'personal-gh.cmd'), 'utf8')).toContain('personal-gh is blocked in this installation')
+    // Git for Windows runs a `!` helper through its POSIX shell, with a path it can read.
+    expect(readFileSync(workerGitConfig(dir), 'utf8'))
+      .toContain('helper = "!f() { \\"C:/Program Files/GitHub CLI/gh-agent.cmd\\" auth git-credential \\"$@\\"; }; f"')
+    // A later run recognizes and replaces its own batch files; the shim directory still drops commands that are no longer blocked.
+    await writeEnvironment(testDeployment({ stateDir: dir, github: { ...base.github, cli }, feishu: undefined }), [], 'win32')
+    expect(readdirSync(bin).sort()).toEqual(['gh.cmd', 'lark-cli.cmd'])
+    expect(credentialHelper(cli, 'win32')).toContain(`"C:/Program Files/GitHub CLI/gh-agent.cmd" auth git-credential "$@"`)
+    expect(credentialHelper(cli, 'linux')).toBe(`!'C:\\Program Files\\GitHub CLI\\gh-agent.cmd' auth git-credential`)
+  })
   it('replaces the files it wrote under the project\'s earlier names', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli', 'older-cli'])
     const legacy = (file: string, name: string) => writeFileSync(file, readFileSync(file, 'utf8').replace('Written by dsh-superagent', `Written by ${name}`))
@@ -111,6 +134,12 @@ it('fails instead of asking the operator\'s askpass helpers when the agent\'s cr
   expect(() => readFileSync(log, 'utf8')).toThrow()
 })
 
+it('runs a batch CLI through the Windows command interpreter, and other programs directly', () => {
+  expect(commandArgv(['C:\\tools\\gh.cmd', 'api', 'repos/acme/a b'], 'win32', 'C:\\Windows\\cmd.exe'))
+    .toEqual(['C:\\Windows\\cmd.exe', '/d', '/s', '/c', 'C:\\tools\\gh.cmd api "repos/acme/a b"'])
+  expect(commandArgv(['gh', 'api'], 'win32')).toEqual(['gh', 'api'])
+  expect(commandArgv(['gh.cmd', 'api'], 'linux')).toEqual(['gh.cmd', 'api'])
+})
 it('removes every spelling of a directory from PATH and keeps the other entries', () => {
   mkdirSync(join(dir, 'state', 'worker-bin'), { recursive: true })
   symlinkSync(join(dir, 'state'), join(dir, 'link'))
