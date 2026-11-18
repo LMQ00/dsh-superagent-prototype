@@ -38,6 +38,13 @@ it('takes a person message in a second main Session, answers there, and ignores 
   h.runtime.sessions.relay('report:second', '{"kind":"worker_report"}', trigger.id)
   await h.runtime.effects.idle('relay')
   expect(h.deliveries.mock.calls.at(-1)![0].sessionId).toBe('second-main')
+  // A background notice is injected into the same conversation, not the home Session.
+  const injected = (id: string) => (h!.agents.get(id) as unknown as { inject: ReturnType<typeof vi.fn> }).inject
+  injected('second-main').mockClear(); injected(h.runtime.masterId).mockClear()
+  h.runtime.sessions.notify('notice:second', { second: true }, 'Second conversation', trigger.id)
+  await h.runtime.effects.idle('notice')
+  expect(injected('second-main')).toHaveBeenCalledTimes(1)
+  expect(injected(h.runtime.masterId)).not.toHaveBeenCalled()
 
   // A subagent inherits its parent's composition but has DSH's subagent markers: its task message is no request.
   await create({ sessionId: 'child-of-second' }); header('child-of-second', { parentSession: 'second-main', origin: 'subagent', delegationDepth: 1, agentPreset: ROUTER })
