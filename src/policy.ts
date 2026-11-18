@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell, type AdmissionRow } from './admission.ts'
 import { key, type AssessmentOutcome, type Mandate, type Policy, type PolicyEffect, type SourceScope, type Strength, type Thread, type Ticket,
   type Trigger, type ActorRef, type GateResult } from './core/index.ts'
-import { sameName } from './infra/text.ts'
+import { repositoryUrl, sameName } from './infra/text.ts'
 import { WORKER_COMMANDS } from './infra/environment.ts'
 
 export const RuleIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/)
@@ -98,13 +98,13 @@ export const EvalConfigSchema = z.object({
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
 /**
- * A project the router may send a ticket to: a name the assessment names, the local directory it works from, and an
- * optional prepare command that lays out the ticket directory; without one the ticket directory is a git worktree of the
- * project, or a copy of it.
+ * A project the router may send a ticket to: a name the assessment names, where the project comes from (a local directory
+ * or a repository URL), and an optional prepare command that lays out the ticket directory; without one the ticket
+ * directory is a git worktree of the project, a clone of its repository, or a copy of it.
  */
 export const ProjectSchema = z.object({
   name: z.string().trim().regex(/^[a-z][a-z0-9-]{0,39}$/, 'Use lowercase letters, digits and dashes, at most 40 characters'),
-  path: z.string().trim().refine(path => path.startsWith('/'), 'An absolute path'),
+  path: z.string().trim().refine(path => path.startsWith('/') || repositoryUrl(path), 'An absolute path, or a repository URL without a password'),
   prepare: z.string().trim().max(LIMITS.prepareCommand).default(''),
 }).strict()
 export type Project = z.infer<typeof ProjectSchema>

@@ -316,7 +316,7 @@ export interface Execution {
   name: string
   directory: string
   assignment: string
-  /** The registered project this ticket works in, when the router named one; its directory is the checkout the ticket directory was prepared from. */
+  /** The registered project this ticket works in, when the router named one; `path` is the local directory or repository URL the ticket directory was prepared from. */
   project?: { name: string; path: string }
 }
 

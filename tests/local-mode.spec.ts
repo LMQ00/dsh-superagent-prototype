@@ -8,7 +8,7 @@ describe('a local installation, which names no repository', () => {
 
   it('works on a local branch and reports, instead of pushing to a remote it does not have', () => {
     expect(worker).toContain('Commit as the author the Delivery requirements section names')
-    expect(worker).toContain('This deployment has no remote and no such CLI, so never push and never open a pull request.')
+    expect(worker).toContain('This deployment has no pull request and no such CLI, so never push and never open a pull request.')
     expect(local.delivery).toContain('There is no CI and no approval pipeline')
     expect(local.delivery).toContain('person reviews and merges locally')
     expect(local.delivery).not.toMatch(/auto-merge|PR description|gh api/)

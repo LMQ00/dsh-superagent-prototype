@@ -111,7 +111,8 @@ export function ExecutionSettings() {
                   onChange={event => setProject(index, { name: event.target.value })} />
               </Field>
               <Field label={t('projectPath')} hint={index === 0 ? t('projectPathHint') : undefined}>
-                <Input className="dt-mono" value={project.path} placeholder="/home/me/src/webapp" spellCheck={false} pattern="/.*" required
+                <Input className="dt-mono" value={project.path} placeholder="https://github.com/me/webapp" spellCheck={false} required
+                  pattern="(?:/|https?://|ssh://|git://|file://|[A-Za-z0-9._\-]+@[A-Za-z0-9._\-]+:).*"
                   onChange={event => setProject(index, { path: event.target.value })} />
               </Field>
               <Field label={t('projectPrepare')} hint={index === 0 ? t('projectPrepareHint') : undefined}>

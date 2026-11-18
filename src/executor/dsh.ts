@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { existsSync } from 'node:fs'
-import { mkdir, rmdir, stat } from 'node:fs/promises'
+import { mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { key, latestAssignment, latestReport, liveTicket, runningAssignment, threadKey, waitsForPerson } from '../core/index.ts'
 import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
@@ -256,11 +256,13 @@ export class DshExecutor implements Executor {
   /**
    * Runs the configured `executor.prepare` command for a new ticket workspace in its parent directory with the ticket's
    * execution environment variables, then verifies the directory as the worker sees it.
-   * A failed prepare command throws `PrepareFailed`, which is not retried automatically; an empty directory it left is removed, a non-empty one kept.
+   * A failed prepare command throws `PrepareFailed`, which is not retried automatically; a directory this run created is removed, so a
+   * later attempt prepares it from scratch rather than starting in a half-made one.
    * @throws PrepareFailed with the command's output when the prepare command fails.
    */
   private async prepareDirectory(ticket: Ticket): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
+    const existed = existsSync(directory)
     await mkdir(dirname(directory), { recursive: true })
     const settings = this.host.store.settings()
     // The project a ticket names may set its own prepare command; without one it gets a worktree or a copy of the project.
@@ -273,8 +275,8 @@ export class DshExecutor implements Executor {
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
     if (command) await runAsWorker(this.host.context.subprocess, prepareShell(command), dirname(directory), signal, env)
       .catch(async (error: unknown) => {
-        // Remove an empty directory left by a failed prepare command so a later retry does not treat it as already prepared.
-        await rmdir(directory).catch(() => { /* Absent, or holding what the command wrote, which the output explains. */ })
+        // A failed clone leaves a directory holding only part of the checkout; keeping it would make a retry start there.
+        if (!existed) await rm(directory, { recursive: true, force: true }).catch(() => { /* What the output explains is enough. */ })
         throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     await mkdir(directory, { recursive: true })
