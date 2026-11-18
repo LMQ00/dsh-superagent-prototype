@@ -9,6 +9,7 @@ import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types
 import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
   from './prompts.ts'
 import { policyVersion } from '../policy.ts'
+import { KV } from '../kv.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
@@ -147,6 +148,15 @@ const PromptsQuery = z.object({ revision: count.optional(), offset: count.defaul
 const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-9-]*$/)])
 const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
+const ConversationQuery = z.object({ session: z.string().trim().min(1).max(200) })
+const ConversationPick = z.object({ session: z.string().trim().min(1).max(200), project: z.string().trim().min(1).max(40).nullable() }).strict()
+/** The selector view for one conversation: whether it is the main Session, its chosen project, and the registered projects. */
+export function conversationView(runtime: HttpHost, session: string) {
+  const projects = runtime.store.settings().executor.projects.map(({ name, path }) => ({ name, path }))
+  const chosen = runtime.store.get(KV.sessions.project(session))
+  const selected = chosen && projects.some(project => project.name === chosen) ? chosen : null
+  return { session, master: session === runtime.masterId, selected, projects }
+}
 
 function routes(runtime: HttpHost): Routes {
   const { store } = runtime
@@ -159,6 +169,17 @@ function routes(runtime: HttpHost): Routes {
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
     'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
+    'GET conversation': ({ query }) => conversationView(runtime, ConversationQuery.parse(query).session),
+    'PUT conversation': async ({ body }) => {
+      const { session, project } = ConversationPick.parse(await body())
+      if (session !== runtime.masterId) throw new RouteError(400, 'Only the main Session takes requests')
+      if (project !== null && !store.settings().executor.projects.some(item => item.name === project)) {
+        throw new RouteError(400, `The project ${project} is not registered in the executor settings`)
+      }
+      if (project === null) store.delete(KV.sessions.project(session))
+      else store.set(KV.sessions.project(session), project)
+      return conversationView(runtime, session)
+    },
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
     'GET threads': ({ query }) => {
       const { filter, offset, limit } = ThreadsQuery.parse(query)

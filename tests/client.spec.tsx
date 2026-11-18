@@ -40,8 +40,15 @@ const openMaster = async (container: HTMLElement) => {
   await act(async () => { button.click() })
   for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
-const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-  const path = new URL(url, 'http://127.0.0.1').pathname.replace('/orchestrator/api/', '')
+const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+  const target = new URL(url, 'http://127.0.0.1')
+  const path = target.pathname.replace('/orchestrator/api/', '')
+  if (path === 'conversation') {
+    const projects = [{ name: 'webapp', path: '/srv/webapp' }, { name: 'api', path: '/srv/api' }]
+    const body = init?.body === undefined ? undefined : JSON.parse(String(init.body)) as { session: string; project: string | null }
+    const session = body?.session ?? target.searchParams.get('session')
+    return Response.json({ session, master: session === 'master', selected: body === undefined ? 'webapp' : body.project, projects })
+  }
   if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
   if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
     setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
@@ -51,7 +58,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 it('registers a localized main panel, sidebar entry and Plugin Manager row page, and no settings section', () => {
   const { entries, dictionaries, main, nav } = fixture([])
-  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'plugins.row.config'])
+  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'plugins.row.config', 'conversation.input.left'])
   expect(entries[2]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
   expect(Object.keys(dictionaries)).toEqual(['dshSuperagent'])
   expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
@@ -76,6 +83,30 @@ it('reports a Session missing from the catalog in the interface language', async
   expect(ctx.uiWorkspace.openSession).not.toHaveBeenCalled()
   expect(document.body.textContent).toContain(zh.sessionNotListed)
   view.dispose()
+})
+
+it('shows and saves the project the main conversation routes to, and hides outside that Session', async () => {
+  serve()
+  const { entries } = fixture(['master'])
+  const seat = entries.find(item => item.options.name === 'conversation.input.left')!
+  const view = await render(seat, { sessionId: 'master', t })
+  const select = view.container.querySelector('select')!
+  expect([...select.options].map(option => option.textContent)).toEqual(['未选择项目', 'webapp', 'api'])
+  expect(select.value).toBe('webapp')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'api')
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  const calls = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+  expect(calls.at(-1)?.[0]).toContain('conversation')
+  expect(calls.at(-1)?.[1]).toMatchObject({ method: 'PUT', body: JSON.stringify({ session: 'master', project: 'api' }) })
+  for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(select.value).toBe('api')
+  view.dispose()
+  const other = await render(seat, { sessionId: 'worker', t })
+  expect(other.container.querySelector('select')).toBeNull()
+  other.dispose()
 })
 
 it('polls one request at a time, keeps the data while new dependencies load, and polls less while hidden', async () => {

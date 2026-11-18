@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { key, type ChannelRef, type OutboundMessage, type Trigger } from '../core/index.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
+import { KV } from '../kv.ts'
 import type { ChannelLink, Localized, SourceKind } from './kind.ts'
 
 export const SOURCE = 'chat'
@@ -18,11 +19,16 @@ export function messageText(message: { content: readonly { type: string; text?: 
 export function ownMessage(source: { kind: string; plugin?: unknown } | undefined): boolean {
   return !!source && (source.kind === 'dsh-superagent' || (source.kind === 'plugin' && source.plugin === 'dsh-superagent'))
 }
-/** Builds the Trigger for one message of the main Session; each message is a Thread of its own. */
-export function chatTrigger(messageId: string, sessionId: string, text: string, at: string): Trigger {
+/** The project the person chose for a conversation, when the selection still names one. */
+export function selectedProject(source: Pick<SourceContext, 'state'>, sessionId: string): string | undefined {
+  const project = source.state.get(KV.sessions.project(sessionId))
+  return typeof project === 'string' && project.trim() ? project : undefined
+}
+/** Builds the Trigger for one message of the main Session; each message is a Thread of its own, with the conversation's project when one is selected. */
+export function chatTrigger(messageId: string, sessionId: string, text: string, at: string, project?: string): Trigger {
   return { id: key('chat-message', sessionId, messageId), source: SOURCE, threads: [{ source: SOURCE, id: messageId }],
     actor: { source: SOURCE, id: OPERATOR }, human: true, addressed: 'direct', at, text,
-    channel: chatChannel(messageId), meta: { messageId, sessionId } }
+    channel: chatChannel(messageId), meta: { messageId, sessionId, ...project ? { project } : {} } }
 }
 export const chatChannel = (messageId: string): ChannelRef =>
   ({ source: SOURCE, thread: `${SOURCE}:${messageId}`, address: { message: messageId } })
@@ -81,7 +87,7 @@ export function apply(ctx: Context): void {
       if (message.role !== 'user' || ownMessage(message.source)) return
       const text = messageText(message)
       if (!text) return
-      const trigger = chatTrigger(String(message.id), String(session.id), text, new Date().toISOString())
+      const trigger = chatTrigger(String(message.id), String(session.id), text, new Date().toISOString(), selectedProject(source, String(session.id)))
       source.atomic(() => source.threads.describe(`${SOURCE}:${trigger.meta.messageId}`, { label: text.slice(0, 80) }))
       if (ready && source.configured()) void source.receive(trigger)
       else held.push(trigger)

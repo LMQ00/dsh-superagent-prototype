@@ -489,3 +489,38 @@ it('gives a worker the other messages of the request its ticket was accepted fro
   expect(page).toMatchObject({ batch: [{ trigger_id: other, read: `trigger/${other}` }] })
   expect(await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `trigger/${other}` })).toMatchObject({ trigger_id: other })
 })
+
+it('routes a conversation\'s requests to the project it selected, unless the accept names another', async () => {
+  const projects = [{ name: 'webapp', path: '/srv/webapp' }, { name: 'api', path: '/srv/api' }]
+  const executor = h.runtime.settings.current().executor
+  await h.runtime.settings.save('executor', { ...executor, projects }, h.runtime.store.blockRevision('executor'), 'panel')
+  const master = h.runtime.masterId
+  expect(await h.api('GET', `conversation?session=${master}`)).toEqual({ status: 200,
+    body: { session: master, master: true, selected: null, projects } })
+  expect((await h.api('PUT', 'conversation', { session: master, project: 'webapp' })).body).toMatchObject({ selected: 'webapp' })
+  // The Trigger carries the conversation's choice, which an accept that omits project keeps.
+  const trigger = feishu('7', '@bot 修一下回归')
+  trigger.meta.project = 'webapp'
+  h.runtime.receive(trigger); await h.runtime.idle()
+  const accepted = await h.route({ kind: 'accept', trigger_id: trigger.id, title: 'Fix', worktree_name: 'fix-regression', acknowledgement: '收到，修复回归。' })
+  const ticket = h.runtime.store.tickets.get((accepted.ticket as { ticket_id: string }).ticket_id)!
+  expect(ticket.execution).toMatchObject({ project: { name: 'webapp', path: '/srv/webapp' } })
+  // An accept may name another registered project and overrides the conversation's pick.
+  const other = feishu('8', '@bot 改一下 api')
+  other.meta.project = 'webapp'
+  h.runtime.receive(other); await h.runtime.idle()
+  const second = await h.route({ kind: 'accept', trigger_id: other.id, title: 'Fix', worktree_name: 'fix-api', acknowledgement: '收到。',
+    project: 'api' })
+  expect(h.runtime.store.tickets.get((second.ticket as { ticket_id: string }).ticket_id)!.execution)
+    .toMatchObject({ project: { name: 'api', path: '/srv/api' } })
+  // A selection the settings do not register is not used, and a choice can be cleared.
+  const stale = feishu('9', '@bot 再来一个')
+  stale.meta.project = 'retired'
+  h.runtime.receive(stale); await h.runtime.idle()
+  const third = await h.route({ kind: 'accept', trigger_id: stale.id, title: 'Fix', worktree_name: 'fix-third', acknowledgement: '收到。' })
+  expect(h.runtime.store.tickets.get((third.ticket as { ticket_id: string }).ticket_id)!.execution).not.toHaveProperty('project')
+  expect((await h.api('PUT', 'conversation', { session: master, project: null })).body).toMatchObject({ selected: null })
+  // Only the main Session takes requests, and only a registered project can be chosen.
+  expect((await h.api('PUT', 'conversation', { session: 'worker-x', project: 'webapp' })).status).toBe(400)
+  expect((await h.api('PUT', 'conversation', { session: master, project: 'retired' })).status).toBe(400)
+})

@@ -9,6 +9,13 @@ import type { SourceStatusView } from './views/sources.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
 
+/** The project selector a conversation shows: whether this Session takes requests, the project it chose, and the registered projects. */
+export interface ConversationView {
+  session: string
+  master: boolean
+  selected: string | null
+  projects: { name: string; path: string }[]
+}
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
 export type TicketFilter = typeof TICKET_FILTERS[number]
@@ -23,6 +30,8 @@ export interface Api {
   'GET search': { query: { q: string }; response: SearchView }
   'GET sources': { response: SourceStatusView[] }
   'GET settings': { response: SettingsView }
+  'GET conversation': { query: { session: string }; response: ConversationView }
+  'PUT conversation': { body: { session: string; project: string | null }; response: ConversationView }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }
   'GET threads/:key': { query?: { limit?: number; before?: string; around?: string }; response: ThreadDetailView }
