@@ -4,6 +4,8 @@
 `status`, `start`, and `restart` exit 0 while the service runs normally; 1 when it is stopped, duplicated, unreachable, or
 reporting a runtime error, which `restart` may fix; 2 when it runs while a component such as a Source reports an error;
 and 3 when it runs and waits for setup. A restart fixes neither 2 nor 3: they need a person.
+
+The `desktop` profile is DeepSeek Harness Desktop's own; the application starts and stops its Host, so this script refuses it.
 """
 
 import argparse
@@ -25,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = ROOT / '.artifacts'
 CONTROL = ARTIFACTS / 'control'
 KEEP_LOGS = 20
+# DeepSeek Harness Desktop owns this profile and the Host process that loads it; the CLI refuses it in every case variant.
+DESKTOP_PROFILE = 'desktop'
 
 
 def control(profile):
@@ -210,7 +214,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'])
     parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'superagent',
-                        help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>.')
+                        help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>. The desktop profile '
+                             'belongs to DeepSeek Harness Desktop and is refused.')
     parser.add_argument('--url', default=os.environ.get('DSH_SUPERAGENT_URL') or 'http://127.0.0.1:3082',
                         help='Health-check URL; override after changing the profile port.')
     parser.add_argument('--timeout', type=float, default=60, help='Startup timeout in seconds.')
@@ -223,6 +228,10 @@ def main():
         parser.error('--timeout and --stop-timeout must be positive')
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', args.profile):
         parser.error('--profile must be a DSH profile name')
+    if args.profile.lower() == DESKTOP_PROFILE:
+        print('DeepSeek Harness Desktop owns the desktop profile and starts and stops its Host; open the application to run '
+              'dsh-superagent there. This script manages a CLI profile.', file=sys.stderr)
+        return 1
     os.umask(0o077)
     with (control(args.profile) / 'operation.lock').open('a') as lock:
         try:

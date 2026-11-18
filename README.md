@@ -8,6 +8,8 @@ dsh-superagent is a proactive coding agent for one GitHub repository, packaged a
 
 It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
 
+The bundle loads in a DeepSeek Harness profile served by `dsh web` and in DeepSeek Harness Desktop; the panel opens in the sidebar of either. [docs/009-desktop.md](docs/009-desktop.md) covers the Desktop installation.
+
 ## Setup
 
 Setup has many steps, so an agent does it with you. Ask your coding agent:
@@ -29,6 +31,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
+- [009 Desktop](docs/009-desktop.md): running it in DeepSeek Harness Desktop
 
 ## Development
 
