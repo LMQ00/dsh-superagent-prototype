@@ -429,6 +429,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/second-main.spec.ts` | A person-started Session that selects the main Session preset: its requests, the answers to its conversation, and its return after a restart |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, including the request DeepSeek Harness Desktop forwards, the status of each kind of failure, the body limit, path parameters and queries |
@@ -481,7 +482,7 @@ A generated column is computed from its row's JSON and is empty outside its set,
 | Schema | Current schema version |
 | Settings versions | `settings-revision`, `settings-version:<n>`, `settings-block-revision:<block>`; snapshots include origin, Policy version and affected Tickets |
 | Prompt versions | `prompt-revision`, `prompt-version:<n>` |
-| Main Session | `master-id`, the home main Session's id |
+| Main Session | `master-id`, the home main Session's id, and `session-main:<session id>`, whether that Session is a main Session |
 | Session prompt history | `session-prompts:<session id>` |
 | Source state | Read positions such as `github-cursor:<number>`, PR CI fingerprints and seen Feishu-topic messages; keys begin with the kind or `thread-` plus a Thread key |
 | Display names | `source-labels:<source id>` |
@@ -517,7 +518,7 @@ The main Session also has DeepSeek Harness's `skill`, `bash`, `read`, `read_imag
 
 ### Presets and wait limits
 
-New main Sessions use `dsh-superagent-router` (`ROUTER_PRESET`): the home main Session the installation creates at startup, and any Session that selects this preset before its first turn. `Sessions` decorates each of them with the main Session's prompt, tools and skills when the preset registry reports the selection. A subagent is not a main Session. Shell commands and job waits return after 5 seconds. If the Web UI selects another preset for the home Session or an Executor Session before the first turn, `Sessions` restores this preset, or `WORKER_PRESET` for a worker; a main Session that selects another preset before its first turn stops being one.
+New main Sessions use `dsh-superagent-router` (`ROUTER_PRESET`): the home main Session the installation creates at startup, and any Session that selects this preset before its first turn. `Sessions` decorates each of them with the main Session's prompt, tools and skills when the preset registry reports the selection, and records its id so reports reach it after a restart, when DSH resumes the Session for the delivery. A subagent is not a main Session. Shell commands and job waits return after 5 seconds. If the Web UI selects another preset for the home Session or an Executor Session before the first turn, `Sessions` restores this preset, or `WORKER_PRESET` for a worker; a main Session that selects another preset before its first turn stops being one.
 
 The `noWait` guard in `src/app/sessions.ts` refuses main-Session shell commands that invoke `sleep` at a command position, shell `timeoutMs` above 30 seconds, and `job_output` waits above 5 seconds. Reports and job results arrive automatically, so waiting only delays incoming candidates.
 

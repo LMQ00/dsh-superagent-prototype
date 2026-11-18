@@ -14,7 +14,7 @@ Plugin configuration holds the state directory and machine limits. Use the panel
 
 The bundle defines `dsh-superagent-worker` for Executors and `dsh-superagent-router` for main Sessions. They appear in the DeepSeek Harness preset list, and the application needs them to create and resume its Sessions.
 
-A Session whose selected preset is `dsh-superagent-router` is a main Session: its messages are requests, it gets the main Session's prompt and tools, and work started there reports back into that conversation. A subagent is not one. The installation creates the home main Session at startup. Opening a blank managed Session in the Web UI can select the profile's default preset; dsh-superagent restores the router preset for the home Session and the worker preset for an Executor Session before the first turn.
+A Session whose selected preset is `dsh-superagent-router` is a main Session: its messages are requests, it gets the main Session's prompt and tools, and work started there reports back into that conversation, which DSH resumes when it is not loaded. A subagent is not one. The installation creates the home main Session at startup. Opening a blank managed Session in the Web UI can select the profile's default preset; dsh-superagent restores the router preset for the home Session and the worker preset for an Executor Session before the first turn.
 
 Both presets run with `danger-full-access` as the operator's OS user and read messages from subscribed Threads. Account wrappers choose the agent's credentials by default; they do not isolate the process. A worker can execute programs by path and read the operator's home directory. For isolation, use a dedicated OS account containing only the agent's credentials.
 

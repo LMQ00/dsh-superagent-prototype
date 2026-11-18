@@ -24,7 +24,7 @@ import type { RegisterTool, Tool } from './tools/tool.ts'
 export interface SessionsHost {
   /** DSH Cordis context: sessions, agents, persistence, and their events. */
   readonly context: Context
-  readonly store: Pick<Store, 'tickets' | 'triggers' | 'settings' | 'get' | 'set' | 'keys'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'settings' | 'get' | 'set' | 'delete' | 'keys'>
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'compose' | 'skills'>
   readonly effects: Pick<Effects, 'enqueue' | 'handle' | 'idle' | 'pending'>
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
@@ -48,6 +48,8 @@ interface SessionBinding {
   skills?: { revision: number; dispose: () => void }
   /** Decorated as a main Session, whether the home one or one that runs the router preset. */
   main?: true
+  /** The permission preset `main` replaced with full access, restored when the Session stops being one. */
+  permissions?: string
   subagent?: true
 }
 
@@ -108,7 +110,7 @@ export class Sessions {
     this.ctx = host.context
     this.agentDelivery = new AgentDelivery(host.context)
     // Deliver relays and notices to the main Session in the order they were queued.
-    host.effects.handle('relay', ({ text, trigger }, requestId) => this.prompt(this.mainFor(trigger), requestId, text, 'steer'), { ordered: true })
+    host.effects.handle('relay', ({ text, trigger }, requestId) => this.promptMain(trigger, requestId, text), { ordered: true })
     host.effects.handle('notice', ({ value, summary, trigger }, name) => this.inject(name, value, summary, trigger), { ordered: true })
   }
   /** Subscribes to host agent and session events so newly created sessions are decorated and model-budget retries are reflected in health. Call once at startup. */
@@ -142,7 +144,7 @@ export class Sessions {
         }
         if (!agent) return
         if (preset === ROUTER_PRESET) { if (agent.session.header?.parentSession === undefined && !this.bindings.has(agent)) void this.decorate(agent, true); return }
-        if (this.bindings.get(agent)?.main) this.release(agent)
+        if (this.bindings.get(agent)?.main) this.release(agent, true)
       })
     })
     ctx.on('agent/status', ({ agent, status }) => {
@@ -185,21 +187,37 @@ export class Sessions {
   }
   /** The id of the message `prompt` delivers under `requestId`, which DSH's inbox events name it by. */
   promptedId(requestId: string): MessageId { return messageId(key(requestId)) }
+  /**
+   * Delivers a main-Session message about `trigger` to the conversation it came from, resuming that Session when it is not
+   * loaded; a conversation whose Session was deleted still reports to the home Session.
+   */
+  async promptMain(trigger: string | undefined, requestId: string, text: string): Promise<void> {
+    const target = this.mainFor(trigger)
+    try { await this.prompt(target, requestId, text, 'steer') }
+    catch (error) {
+      if (target === this.host.masterId || (error as { code?: string }).code !== 'session/not-found') throw error
+      await this.prompt(this.host.masterId, requestId, text, 'steer')
+    }
+  }
   /** The decorated main Sessions, the home one included, whose turns a shutdown cancels. */
   mainSessions(): Agent[] { return [...this.bindings].filter(([, binding]) => binding.main).map(([agent]) => agent) }
-  /** Whether `sessionId` is a main Session: the home Session, or a root Session that runs the router preset. */
+  /** Whether `sessionId` is a main Session: the home Session, or a root Session that runs the router preset, loaded or not. */
   isMain(sessionId: string): boolean {
     if (sessionId === this.host.masterId) return true
     const agent = this.ctx.agents.get(sessionId as SessionId)
-    return !!agent && (this.bindings.get(agent)?.main === true || this.mainAgent(agent))
+    return agent
+      ? this.bindings.get(agent)?.main === true || this.mainAgent(agent)
+      : this.host.store.get(KV.sessions.main(sessionId)) === true
   }
   /** Whether `agent` is the home Session or a root Session that runs the router preset; a subagent is none, whatever preset its header names. */
   private mainAgent(agent: Agent): boolean {
-    return agent.id === this.host.masterId || (agent.session.header?.parentSession === undefined && this.routed(agent))
+    const header = agent.session.header
+    return agent.id === this.host.masterId
+      || (header?.origin !== 'subagent' && header?.delegationDepth === undefined && this.routed(agent))
   }
   /**
    * The main Session a message about trigger `triggerId` belongs in: the Session whose conversation started the trigger,
-   * while that Session still runs as a main Session, else the home Session.
+   * while that Session is still a main Session, else the home Session.
    */
   mainFor(triggerId?: string): string {
     const origin = triggerId === undefined ? undefined : this.host.store.triggers.get(triggerId)?.meta.sessionId
@@ -216,9 +234,11 @@ export class Sessions {
     await this.host.effects.idle('notice')
     return this.host.effects.pending('notice', name) ? 'pending' : 'injected'
   }
-  /** Injects a notice into the main Session of trigger `trigger` without waking it; no-op if that Session does not exist yet. */
+  /** Injects a notice into the main Session of trigger `trigger` without waking it, else into the home Session; no-op if neither resolves. */
   private async inject(name: string, value: Record<string, unknown>, summary: string, trigger?: string): Promise<void> {
-    const resolved = await this.ctx.sessionController.resolveAgent(this.mainFor(trigger) as SessionId)
+    const target = this.mainFor(trigger)
+    let resolved = await this.ctx.sessionController.resolveAgent(target as SessionId)
+    if ('error' in resolved && target !== this.host.masterId) resolved = await this.ctx.sessionController.resolveAgent(this.host.masterId as SessionId)
     if ('error' in resolved) return
     // Deduplicate by notice name and payload hash so retries are idempotent while updated payloads still deliver.
     const text = JSON.stringify(value)
@@ -276,8 +296,14 @@ export class Sessions {
     if (!main && !ticket) { this.limitSubagent(agent); return }
     const binding: SessionBinding = { disposers: [], ...main ? { main: true as const } : {} }
     this.bindings.set(agent, binding)
-    // A main Session runs the person's requests without approvals, as the home one does.
-    if (main) this.ctx.permissionPresets.set(agent.session, 'danger-full-access')
+    if (main) {
+      this.host.store.set(KV.sessions.main(agent.id), true)
+      // A main Session runs the person's requests without approvals, as the home one does.
+      const presets = this.ctx.permissionPresets
+      const previous = presets.current(agent.session)
+      if (previous !== 'danger-full-access' && presets.names.includes(previous)) binding.permissions = previous
+      presets.set(agent.session, 'danger-full-access')
+    }
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
     this.updateModelHealth()
@@ -378,12 +404,22 @@ export class Sessions {
     if (revisions.at(-1) !== version.revision) store.set(KV.sessions.prompts(agent.id), bound)
     return version
   }
-  /** Releases registrations for `agent` in reverse order (LIFO); disposing its skill scope releases its skills as well. */
-  private release(agent: Agent): void {
+  /**
+   * Releases registrations for `agent` in reverse order (LIFO); disposing its skill scope releases its skills as well.
+   * On demotion, also withdraws full access and the durable main record; a disposed main Session keeps both for its return.
+   */
+  private release(agent: Agent, demoted = false): void {
     const binding = this.bindings.get(agent)
     if (!binding) return
     this.bindings.delete(agent)
     binding.skills?.dispose()
+    if (demoted && binding.main) {
+      this.host.store.delete(KV.sessions.main(agent.id))
+      if (binding.permissions) {
+        try { this.ctx.permissionPresets.set(agent.session, binding.permissions) }
+        catch (error) { this.ctx.logger.warn('dsh-superagent could not restore a Session permission preset: %s', String(error)) }
+      }
+    }
     for (const dispose of binding.disposers.splice(0).reverse()) {
       try { dispose() } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
     }

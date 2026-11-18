@@ -41,9 +41,12 @@ export const receiptNotice = (value: Record<string, unknown>, summary: string, t
   const id = key('receipt', randomUUID())
   return trigger === undefined ? [id, value, summary] : [id, value, summary, trigger]
 }
-/** Builds a notice that a person removed a thread's subscriptions at `at`; a later removal of the same thread replaces an unsent waiting notice. */
-export const subscriptionNotice = (thread: string, at?: string): Notice => [`subscription:${thread}`,
-  { subscription_changes: [{ thread, removed: true }], ...at ? { at } : {} }, `Removed the subscriptions on thread ${thread}`]
+/** Builds a notice that a person removed a thread's subscriptions at `at`, for the conversation `trigger` came from; a later removal of the same thread replaces an unsent waiting notice. */
+export const subscriptionNotice = (thread: string, at?: string, trigger?: string): Notice => {
+  const value = { subscription_changes: [{ thread, removed: true }], ...at ? { at } : {} }
+  const summary = `Removed the subscriptions on thread ${thread}`
+  return trigger === undefined ? [`subscription:${thread}`, value, summary] : [`subscription:${thread}`, value, summary, trigger]
+}
 
 /**
  * Converts an unsolicited domain event into a main-Session notice (`ticket.ended`, `trigger.requeued`, or
@@ -61,7 +64,7 @@ export function eventNotice(event: DomainEvent, ticket: (id: string) => Ticket |
     const id = event.data.triggerId
     return receiptNotice({ trigger_requeued: id, read: `trigger/${id}`, at }, `Trigger ${id} queued for a fresh assessment`, id)
   }
-  if (event.type === 'thread.unsubscribed' && event.data.by === 'person') return subscriptionNotice(event.data.threadKey, at)
+  if (event.type === 'thread.unsubscribed' && event.data.by === 'person') return subscriptionNotice(event.data.threadKey, at, ticket(event.data.ticketId)?.origin.triggerId)
   if (event.type === 'thread.unsubscribed') {
     const { ticketId, threadKey: thread, reason } = event.data
     const note = 'Its Executor found this thread unrelated after reading it; attach later triggers there to this ticket only when they '

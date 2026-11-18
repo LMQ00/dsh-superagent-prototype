@@ -203,7 +203,7 @@ beforeEach(async () => {
     inspect: vi.fn(async () => ({ events: [] })),
   }
   jobs = jobRegistry()
-  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }), archivedSessionIds: [], unarchiveSession: vi.fn(async () => {}) }, permissionPresets: { set: () => {} }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
+  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }), archivedSessionIds: [], unarchiveSession: vi.fn(async () => {}) }, permissionPresets: { current: () => 'auto', names: ['auto', 'danger-full-access'], set: vi.fn() }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT(), OTHER(), BOT()]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store); store.close()
@@ -1757,6 +1757,11 @@ it('takes a Session that selects the main Session preset as a main Session, and 
   expect(runtime.isMain('second-main')).toBe(true)
   expect(runtime.isMain(runtime.masterId)).toBe(true)
   expect(runtime.isMain('someone-else')).toBe(false)
+  // The Session is recorded as a main Session, and runs with the home Session's full access.
+  expect(runtime.store.get(KV.sessions.main('second-main'))).toBe(true)
+  const permissionSet = (services.permissionPresets as { set: ReturnType<typeof vi.fn> }).set
+  const secondSession = (agents.get('second-main') as unknown as { session: unknown }).session
+  expect(permissionSet).toHaveBeenLastCalledWith(secondSession, 'danger-full-access')
   // Work started in that conversation reports there, not to the home Session.
   const trigger: Trigger = { id: 'chat-second-1', source: 'chat', threads: [{ source: 'chat', id: 'm-1' }], actor: { source: 'chat', id: 'operator' },
     human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Add a dark mode', meta: { messageId: 'm-1', sessionId: 'second-main' } }
@@ -1772,19 +1777,54 @@ it('takes a Session that selects the main Session preset as a main Session, and 
   selected.set('second-main', 'standard')
   ctx.emit('agent-preset/selected', 'second-main', 'standard')
   await vi.waitFor(() => expect(runtime.isMain('second-main')).toBe(false))
+  expect(runtime.store.get(KV.sessions.main('second-main'))).toBeUndefined()
+  expect(permissionSet).toHaveBeenLastCalledWith(secondSession, 'auto')
   runtime.sessions.relay('relay-later', '{"kind":"worker_report"}', trigger.id)
   await runtime.effects.idle('relay')
   expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
 })
 
+it('answers in a main Session that is not loaded, resuming it for the report', async () => {
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'second-main', agentPreset: 'dsh-superagent-router' })
+  const ctx = (runtime as unknown as { ctx: Context }).ctx
+  await ctx.parallel('agent/created', { agent: agents.get('second-main') } as never)
+  expect(runtime.isMain('second-main')).toBe(true)
+  const trigger: Trigger = { id: 'chat-second-2', source: 'chat', threads: [{ source: 'chat', id: 'm-2' }], actor: { source: 'chat', id: 'operator' },
+    human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Add a dark mode', meta: { messageId: 'm-2', sessionId: 'second-main' } }
+  runtime.store.triggers.save(trigger)
+  // The application restarted, so the Session is not in the registry; its record still says it is a main Session.
+  agents.delete('second-main')
+  expect(runtime.isMain('second-main')).toBe(true)
+  expect(runtime.sessions.mainFor(trigger.id)).toBe('second-main')
+  // Delivering the report resumes the Session from DSH's persistence.
+  const resolve = controller.resolveAgent.getMockImplementation() as (id: string) => Promise<unknown>
+  controller.resolveAgent.mockImplementation(async (id: string) => {
+    if (id === 'second-main' && !agents.has(id)) {
+      await (controller.create as unknown as (options: { sessionId: string; agentPreset?: string }) => Promise<void>)({ sessionId: id, agentPreset: 'dsh-superagent-router' })
+      ;(agents.get(id) as unknown as { session: { header: Record<string, unknown> } }).session.header = { agentPreset: 'dsh-superagent-router' }
+    }
+    return resolve(id)
+  })
+  runtime.sessions.relay('relay-resumed', '{"kind":"worker_report"}', trigger.id)
+  await runtime.effects.idle('relay')
+  expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe('second-main')
+})
+
 it('does not take a subagent of a main Session as a main Session, whatever preset its header names', async () => {
-  // DSH records the parent's Session id in a subagent's header; a provider may also copy a preset into it.
+  // DSH marks a subagent with `origin` and a delegation depth; its header also names the parent and may copy the preset.
   await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'child-of-home', agentPreset: 'dsh-superagent-router' })
   const child = agents.get('child-of-home')! as unknown as { session: { header: Record<string, unknown> } }
-  child.session.header = { parentSession: runtime.masterId, agentPreset: 'dsh-superagent-router' }
+  child.session.header = { parentSession: runtime.masterId, origin: 'subagent', delegationDepth: 1, agentPreset: 'dsh-superagent-router' }
   await (runtime as unknown as { ctx: Context }).ctx.parallel('agent/created', { agent: child } as never)
   expect(runtime.isMain('child-of-home')).toBe(false)
   expect(tools.get('child-of-home')?.has('orchestrator_route')).toBe(false)
+  // DSH also records the Session a fork came from there; a fork is an ordinary Session, so it keeps the role its preset names.
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'fork-of-home', agentPreset: 'dsh-superagent-router' })
+  const fork = agents.get('fork-of-home')! as unknown as { session: { header: Record<string, unknown> } }
+  fork.session.header = { parentSession: runtime.masterId, isSeeded: true, agentPreset: 'dsh-superagent-router' }
+  await (runtime as unknown as { ctx: Context }).ctx.parallel('agent/created', { agent: fork } as never)
+  expect(runtime.isMain('fork-of-home')).toBe(true)
+  expect(tools.get('fork-of-home')?.has('orchestrator_route')).toBe(true)
   // A Trigger its conversation started reports to the home Session, as one from any Source without a main Session does.
   const trigger: Trigger = { id: 'chat-child-1', source: 'chat', threads: [{ source: 'chat', id: 'm-child' }], actor: { source: 'chat', id: 'operator' },
     human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Do the task my parent gave me', meta: { messageId: 'm-child', sessionId: 'child-of-home' } }
