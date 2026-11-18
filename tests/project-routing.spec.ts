@@ -81,7 +81,7 @@ describe('the project a ticket works in', () => {
     const root = mkdtempSync(join(tmpdir(), 'clone-'))
     const origin = join(root, 'origin'), target = join(root, 'work', 'webapp', 'fix-typo')
     mkdirSync(origin); mkdirSync(dirname(target), { recursive: true })
-    const git = (...args: string[]) => execFile('git', args, { cwd: origin, env: gitEnv() })
+    const git = (...args: string[]) => exec('git', args, { cwd: origin, env: gitEnv() })
     await git('init', '--quiet', '-b', 'main')
     writeFileSync(join(origin, 'README.md'), 'hello')
     await git('add', '.')
