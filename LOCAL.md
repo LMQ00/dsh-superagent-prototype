@@ -47,6 +47,8 @@ dsh plugin --profile superagent add "link:$PWD"
    - 项目名：`webapp`（小写字母/数字/短横，路由时用它点名）
    - 项目目录或仓库链接：`/root/src/webapp` 本机绝对路径，或 `https://github.com/me/webapp.git`、`git@github.com:me/webapp.git` 这样的仓库链接（链接里不要带密码）
    - prepare 命令：**留空自动准备** —— 仓库链接克隆成工单目录，本机 git 仓库开一个工作树，两者都在 `agent/$DSH_SUPERAGENT_NAME` 分支上；非 git 目录直接复制；也可以自己写一条命令。
+
+   主对话输入框的项目选择旁有管理按钮，也可以直接添加或删除项目登记；项目文件不会被删除。
 3. 没有第 3 件：直接在主对话里说需求。
 
 登记过项目以后，主对话的输入框会多出一个项目选择，选中 `webapp` 就是给这次对话定下目标；也可以不动它，直接在话里点名。

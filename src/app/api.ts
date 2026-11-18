@@ -32,6 +32,8 @@ export interface Api {
   'GET settings': { response: SettingsView }
   'GET conversation': { query: { session: string }; response: ConversationView }
   'PUT conversation': { body: { session: string; project: string | null }; response: ConversationView }
+  'POST conversation/projects': { body: { session: string; project: { name: string; path: string } }; response: ConversationView }
+  'DELETE conversation/projects/:name': { query: { session: string }; response: ConversationView }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }
   'GET threads/:key': { query?: { limit?: number; before?: string; around?: string }; response: ThreadDetailView }

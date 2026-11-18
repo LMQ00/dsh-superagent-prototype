@@ -73,6 +73,45 @@ it('lets any main Session take the conversation project, and no other', async ()
     .toEqual({ status: 400, body: { error: 'Only the main Session takes requests' } })
 })
 
+it('adds and removes registered projects for a main Session, and clears a conversation pointed at a removed one', async () => {
+  const saves: { block: string; value: { projects: { name: string; path: string }[] }; revision: number; origin: string }[] = []
+  const values = new Map<string, string | null>([['session-project:home', 'api'], ['session-project:second', 'webapp']])
+  let projects: { name: string; path: string; prepare?: string }[] = [{ name: 'webapp', path: '/srv/webapp', prepare: 'make setup' }]
+  const call = serve({
+    sessions: { isMain: (id: string) => id === 'home' || id === 'second' },
+    settings: { save: async (block: unknown, value: { projects: { name: string; path: string }[] }, revision: number, origin: string) => {
+      saves.push({ block: String(block), value, revision, origin })
+      projects = value.projects
+      return { saved: true, revision: revision + 1, restarting: false }
+    } },
+    store: { settings: () => SettingsSchema.parse({ executor: { projects, maxWorkers: 5, directory: '/work', prepare: 'echo hi',
+      blockedCommands: ['rm'] } }), blockRevision: () => 7,
+      keys: () => [...values.keys()], get: (key: string) => values.get(key), delete: (key: string) => { values.delete(key) } },
+  })
+  // A new project keeps the rest of the executor block and is saved as a panel change against its current revision.
+  expect(await call('POST', 'conversation/projects', { session: 'home', project: { name: 'api', path: '/srv/api' } }))
+    .toMatchObject({ status: 200, body: { selected: 'api', projects: [{ name: 'webapp' }, { name: 'api', path: '/srv/api' }] } })
+  expect(saves[0]).toMatchObject({ block: 'executor', revision: 7, origin: 'panel' })
+  expect(saves[0]!.value).toEqual({ model: null, maxWorkers: 5, directory: '/work', prepare: 'echo hi', projects: [
+    { name: 'webapp', path: '/srv/webapp', prepare: 'make setup' }, { name: 'api', path: '/srv/api', prepare: '' }],
+  blockedCommands: ['rm'] })
+  // Removing the selected project clears the conversations that pointed at it, including another main Session's.
+  expect(await call('DELETE', 'conversation/projects/api?session=home')).toMatchObject({ status: 200,
+    body: { selected: null, projects: [{ name: 'webapp' }] } })
+  expect(values.has('session-project:home')).toBe(false)
+  expect(values.get('session-project:second')).toBe('webapp')
+  expect(await call('DELETE', 'conversation/projects/none?session=home')).toEqual({ status: 404, body: { error: 'Project not found' } })
+  // Names and sources follow the executor schema, and duplicate names are refused before saving.
+  expect(await call('POST', 'conversation/projects', { session: 'home', project: { name: 'Bad Name', path: '/srv/bad' } }))
+    .toMatchObject({ status: 400, body: { issues: [{ path: 'name' }] } })
+  expect(await call('POST', 'conversation/projects', { session: 'home', project: { name: 'webapp', path: '/srv/again' } }))
+    .toMatchObject({ status: 400, body: { error: expect.stringContaining('already registered') } })
+  // Only a main Session manages the registry.
+  expect(await call('POST', 'conversation/projects', { session: 'worker-t1', project: { name: 'api2', path: '/srv/api2' } }))
+    .toEqual({ status: 400, body: { error: 'Only the main Session takes requests' } })
+  expect(saves).toHaveLength(2)
+})
+
 it('decodes path parameters and parses each route\'s query', async () => {
   const seen: unknown[] = []
   const call = serve({
