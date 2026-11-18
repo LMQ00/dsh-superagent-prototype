@@ -1794,6 +1794,16 @@ it('does not take a subagent of a main Session as a main Session, whatever prese
   expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
 })
 
+it('cancels the turn of every main Session when the application stops', async () => {
+  // A second main Session, created with the router preset as the panel does.
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'second-main', agentPreset: 'dsh-superagent-router' })
+  await (runtime as unknown as { ctx: Context }).ctx.parallel('agent/created', { agent: agents.get('second-main') } as never)
+  expect(runtime.isMain('second-main')).toBe(true)
+  await runtime.stop()
+  expect(agents.get('second-main')!.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+  expect(agents.get(runtime.masterId)!.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+})
+
 it('gives a subagent of a worker only the worker\'s work tools, and none once the ticket ended', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   // DSH creates the subagent under the standard preset, with the worker's Session as its parent.
