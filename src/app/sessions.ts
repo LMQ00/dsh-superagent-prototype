@@ -276,6 +276,8 @@ export class Sessions {
     if (!main && !ticket) { this.limitSubagent(agent); return }
     const binding: SessionBinding = { disposers: [], ...main ? { main: true as const } : {} }
     this.bindings.set(agent, binding)
+    // A main Session runs the person's requests without approvals, as the home one does.
+    if (main) this.ctx.permissionPresets.set(agent.session, 'danger-full-access')
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
     this.updateModelHealth()
