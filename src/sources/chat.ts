@@ -1,4 +1,4 @@
-/** Chat Source: the person's own conversation with the main Session is the intake, so a request needs no account and no file. */
+/** Chat Source: the person's own conversation with a main Session is the intake, so a request needs no account and no file. */
 import type { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import { KV } from '../kv.ts'
 import type { ChannelLink, Localized, SourceKind } from './kind.ts'
 
 export const SOURCE = 'chat'
-/** The single sender this Source speaks for: the person at this machine typing in the main Session. */
+/** The single sender this Source speaks for: the person at this machine typing in a main Session. */
 export const OPERATOR = 'operator'
 /** The text of a user message, with the blocks that carry no words left out. */
 export function messageText(message: { content: readonly { type: string; text?: string }[] }): string {
@@ -24,7 +24,7 @@ export function selectedProject(source: Pick<SourceContext, 'state'>, sessionId:
   const project = source.state.get(KV.sessions.project(sessionId))
   return typeof project === 'string' && project.trim() ? project : undefined
 }
-/** Builds the Trigger for one message of the main Session; each message is a Thread of its own, with the conversation's project when one is selected. */
+/** Builds the Trigger for one message of a main Session; each message is a Thread of its own, with the conversation's project when one is selected. */
 export function chatTrigger(messageId: string, sessionId: string, text: string, at: string, project?: string): Trigger {
   return { id: key('chat-message', sessionId, messageId), source: SOURCE, threads: [{ source: SOURCE, id: messageId }],
     actor: { source: SOURCE, id: OPERATOR }, human: true, addressed: 'direct', at, text,
@@ -52,7 +52,7 @@ export const chatKind: SourceKind = {
   kind: SOURCE,
   title: { zh: '主对话', en: 'Main Session' },
   description: { zh: '主 Session 里这个人说的话就是入口：每条消息是一个候选，主 Session 判断后决定接成工单、并到已有工单、还是忽略。不需要任何账号或消息平台。',
-    en: 'What the person writes in the main Session is the intake: every message becomes a candidate, and the main Session decides whether to accept it as a ticket, attach it to one, or ignore it. No account or messaging platform is involved.' },
+    en: 'What the person writes in a main Session is the intake: every message becomes a candidate, and the main Session decides whether to accept it as a ticket, attach it to one, or ignore it. No account or messaging platform is involved.' },
   schema: z.object({}).strict(),
   fields: [],
   health: ['chat'],
@@ -82,7 +82,7 @@ export function apply(ctx: Context): void {
       source.report('chat', health('ready', 'chatSession'))
     }).catch(() => { /* A source whose setup never resolves reports nothing. */ })
     const listener = ctx.on('session/event', (session, event) => {
-      if (event.type !== 'user/message' || session.id !== ctx.orchestrator.masterId) return
+      if (event.type !== 'user/message' || !ctx.orchestrator.isMain(String(session.id))) return
       const message = event.data
       if (message.role !== 'user' || ownMessage(message.source)) return
       const text = messageText(message)

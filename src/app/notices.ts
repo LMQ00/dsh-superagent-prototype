@@ -8,10 +8,11 @@ import type { Store } from './store.ts'
 import { ticketCard } from './cards.ts'
 
 /**
- * A background notice tuple for the main Session: `[name, value, summary]`, where `name` is the coalescing key in
- * `Effects` (a newer notice with the same `name` overwrites an unsent waiting one, rather than permanently deduplicating future notices).
+ * A background notice tuple for the main Session: `[name, value, summary, trigger]`, where `name` is the coalescing key in
+ * `Effects` (a newer notice with the same `name` overwrites an unsent waiting one, rather than permanently deduplicating
+ * future notices), and `trigger` names the trigger whose conversation the notice belongs in, the home Session when unset.
  */
-export type Notice = readonly [name: string, value: Record<string, unknown>, summary: string]
+export type Notice = readonly [name: string, value: Record<string, unknown>, summary: string, trigger?: string]
 /** Builds a notice for a saved prompt configuration revision, coalescing under `'prompts'`. */
 export const promptsNotice = (revision: number): Notice =>
   ['prompts', { prompt_config_saved: revision, effect: 'next-request', read: `prompts/${revision}` }, `Prompt configuration saved (revision ${revision})`]
@@ -36,10 +37,16 @@ function brief(ticket: Ticket) {
   return card
 }
 /** Creates a one-off receipt notice with a unique `name` key so repeated occurrences of the same event are each delivered instead of coalescing. */
-export const receiptNotice = (value: Record<string, unknown>, summary: string): Notice => [key('receipt', randomUUID()), value, summary]
-/** Builds a notice that a person removed a thread's subscriptions at `at`; a later removal of the same thread replaces an unsent waiting notice. */
-export const subscriptionNotice = (thread: string, at?: string): Notice => [`subscription:${thread}`,
-  { subscription_changes: [{ thread, removed: true }], ...at ? { at } : {} }, `Removed the subscriptions on thread ${thread}`]
+export const receiptNotice = (value: Record<string, unknown>, summary: string, trigger?: string): Notice => {
+  const id = key('receipt', randomUUID())
+  return trigger === undefined ? [id, value, summary] : [id, value, summary, trigger]
+}
+/** Builds a notice that a person removed a thread's subscriptions at `at`, for the conversation `trigger` came from; a later removal of the same thread replaces an unsent waiting notice. */
+export const subscriptionNotice = (thread: string, at?: string, trigger?: string): Notice => {
+  const value = { subscription_changes: [{ thread, removed: true }], ...at ? { at } : {} }
+  const summary = `Removed the subscriptions on thread ${thread}`
+  return trigger === undefined ? [`subscription:${thread}`, value, summary] : [`subscription:${thread}`, value, summary, trigger]
+}
 
 /**
  * Converts an unsolicited domain event into a main-Session notice (`ticket.ended`, `trigger.requeued`, or
@@ -50,31 +57,32 @@ export function eventNotice(event: DomainEvent, ticket: (id: string) => Ticket |
   if (event.type === 'ticket.ended') {
     const { ticketId, by, outcome, reason = outcome } = event.data
     const ended = ticket(ticketId)
-    return receiptNotice(ended ? { ticket_ended: brief(ended) } : { ticket_ended: ticketId, by, outcome, reason, at }, `Ticket ${ticketId} ended (${reason})`)
+    return receiptNotice(ended ? { ticket_ended: brief(ended) } : { ticket_ended: ticketId, by, outcome, reason, at },
+      `Ticket ${ticketId} ended (${reason})`, ended?.origin.triggerId)
   }
   if (event.type === 'trigger.requeued') {
     const id = event.data.triggerId
-    return receiptNotice({ trigger_requeued: id, read: `trigger/${id}`, at }, `Trigger ${id} queued for a fresh assessment`)
+    return receiptNotice({ trigger_requeued: id, read: `trigger/${id}`, at }, `Trigger ${id} queued for a fresh assessment`, id)
   }
-  if (event.type === 'thread.unsubscribed' && event.data.by === 'person') return subscriptionNotice(event.data.threadKey, at)
+  if (event.type === 'thread.unsubscribed' && event.data.by === 'person') return subscriptionNotice(event.data.threadKey, at, ticket(event.data.ticketId)?.origin.triggerId)
   if (event.type === 'thread.unsubscribed') {
     const { ticketId, threadKey: thread, reason } = event.data
     const note = 'Its Executor found this thread unrelated after reading it; attach later triggers there to this ticket only when they '
       + 'point at it explicitly.'
     return receiptNotice({ thread_unrelated: { ticket_id: ticketId, thread, reason }, at, note },
-      `Ticket ${ticketId} no longer follows thread ${thread}: ${reason}`)
+      `Ticket ${ticketId} no longer follows thread ${thread}: ${reason}`, ticket(ticketId)?.origin.triggerId)
   }
   return undefined
 }
 
 /** Builds a background notice when a ticket's worker subscribes to a related thread for context only. */
-export const threadFollowedNotice = (ticketId: string, thread: string, reason: string): Notice =>
+export const threadFollowedNotice = (ticketId: string, thread: string, reason: string, trigger?: string): Notice =>
   receiptNotice({ thread_followed: { ticket_id: ticketId, thread, reason },
     note: 'For context only: its messages reach this ticket and grant nothing.' },
-    `Ticket ${ticketId} follows thread ${thread} for context: ${reason}`)
+    `Ticket ${ticketId} follows thread ${thread} for context: ${reason}`, trigger)
 
-/** Steering relay payload for the main Session: `id` is the request ID that makes delivery idempotent, and `text` is the message body. */
-export interface Relay { id: string; text: string }
+/** Steering relay payload for the main Session: `id` is the request ID that makes delivery idempotent, `text` is the message body, and `trigger` the trigger whose conversation receives it. */
+export interface Relay { id: string; text: string; trigger?: string }
 /** What a follow-up asks of the main Session: nothing but a stop the person asks for, since its ticket's worker decides it. */
 const FOLLOWUP_NOTE = 'Its ticket\'s worker has it and decides; act only if the person asks to stop the work '
   + '(orchestrator_route kind stop with this trigger_id).'
@@ -101,8 +109,8 @@ export function followupNotice(store: Store, sources: SourceRegistry, triggerId:
  */
 export function followupRelay(message: { trigger_id: string },
   tickets: readonly { ticket_id: string; title: string; state: string; context?: boolean }[]): Relay {
-  return { id: `followup:${message.trigger_id}`, text: JSON.stringify({ kind: 'follow_up', ...message, delivered_to: tickets,
-    note: FOLLOWUP_NOTE }) }
+  return { id: `followup:${message.trigger_id}`, trigger: message.trigger_id, text: JSON.stringify({ kind: 'follow_up', ...message,
+    delivered_to: tickets, note: FOLLOWUP_NOTE }) }
 }
 /** Formats a worker report relay for the main Session (truncating summaries over 600 characters behind `ticket/<id>/result`); `replyTo` names the human question trigger it answers. */
 export function resultRelay(ticket: Ticket, state: string, text: string, replyTo?: string): Relay {
@@ -110,7 +118,7 @@ export function resultRelay(ticket: Ticket, state: string, text: string, replyTo
   const summary = text.length > 600 ? { summary: text.slice(0, 600), chars: text.length } : { summary: text }
   const report = { kind: 'worker_report', ticket: brief(ticket), trigger_id: ticket.origin.triggerId, state, ...replyTo ? { answer_to: replyTo } : {},
     ...summary, read: `ticket/${ticket.id}/result` }
-  return { id: `report:${id}`, text: JSON.stringify(report) }
+  return { id: `report:${id}`, trigger: ticket.origin.triggerId, text: JSON.stringify(report) }
 }
 /**
  * Converts a worker report recorded on `ticket` into a main-Session relay: a question for a person produces a
@@ -121,7 +129,7 @@ export function resultRelay(ticket: Ticket, state: string, text: string, replyTo
 export function reportRelay(ticket: Ticket, report: Pick<WorkerReport, 'state' | 'summary' | 'question' | 'answers'>): Relay | undefined {
   const asked = report.question ? ticket.attention : undefined
   if (asked) {
-    return { id: `attention:${ticket.id}:${asked.id}`,
+    return { id: `attention:${ticket.id}:${asked.id}`, trigger: ticket.origin.triggerId,
       text: JSON.stringify({ kind: 'worker_attention', ticket: brief(ticket), state: report.state, read: `ticket/${ticket.id}/result` }) }
   }
   if (report.state === 'progress' && !report.answers) return undefined

@@ -443,7 +443,7 @@ export class DshExecutor implements Executor {
       this.relay(resultRelay(updated, 'failed', summary))
     })
   }
-  private relay({ id, text }: { id: string; text: string }): void { this.host.sessions.relay(id, text) }
+  private relay({ id, text, trigger }: { id: string; text: string; trigger?: string }): void { this.host.sessions.relay(id, text, trigger) }
   private async launch(ticket: Ticket, assignment: Assignment): Promise<void> {
     const current = () => {
       if (this.host.closing()) throw new Error('dsh-superagent is stopping')

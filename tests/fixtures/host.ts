@@ -124,7 +124,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
     if (closed.has(parent)) throw new Error('DRAINING: the Session admits no new subagents')
     const id = `child-${children.size + 1}`
     children.set(id, { parent, live: true, settled: Promise.withResolvers<void>() })
-    agents.set(id, { id, status: 'running', session: { header: { parentSession: parent } } } as never)
+    agents.set(id, { id, status: 'running', session: { header: { parentSession: parent, origin: 'subagent', delegationDepth: 1 } } } as never)
     return id
   }
   return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }
@@ -238,7 +238,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const jobs = jobRegistry(id => agents.get(id))
   const subagents = subagentRuntime(agents)
   const services = { agents, llm: { resolveCallConfig: vi.fn(async (value: unknown) => value) }, sessionController: controller,
-    sessionPersistence: persistence, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }), archivedSessionIds: [], unarchiveSession: async () => {} }, permissionPresets: { set: () => {} }, subprocess, webServer,
+    sessionPersistence: persistence, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }), archivedSessionIds: [], unarchiveSession: async () => {} }, permissionPresets: { current: () => 'auto', names: ['auto', 'danger-full-access'], set: () => {} }, subprocess, webServer,
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)

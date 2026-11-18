@@ -24,8 +24,10 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 }
 export interface SourceHost {
   readonly sources: SourceRegistry
-  /** The main Session's id, the person's own conversation with this installation. */
+  /** The home main Session: where reports go that belong to no other main Session's conversation. */
   readonly masterId: string
+  /** Whether `sessionId` is a main Session: the home one, or a root Session that runs the superagent main Session preset. */
+  isMain(sessionId: string): boolean
   /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
   context(kind: { kind: string; health: readonly string[] }): SourceContext
 }
