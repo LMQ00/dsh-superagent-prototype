@@ -6,12 +6,17 @@ describe('a local installation, which names no repository', () => {
   const local = defaultPrompts(true), remote = defaultPrompts()
   const worker = composePrompt(local, 'worker'), main = composePrompt(local, 'orchestrator')
 
-  it('works on a local branch and reports, instead of pushing to a remote it does not have', () => {
+  it('works on a local branch, merges only what a person approved, and reports instead of pushing to a remote it does not have', () => {
     expect(worker).toContain('Commit as the author the Delivery requirements section names')
     expect(worker).toContain('This deployment has no pull request and no such CLI, so never push and never open a pull request.')
     expect(local.delivery).toContain('There is no CI and no approval pipeline')
-    expect(local.delivery).toContain('person reviews and merges locally')
-    expect(local.delivery).not.toMatch(/auto-merge|PR description|gh api/)
+    expect(local.delivery).toContain('only after a person explicitly approves merging')
+    expect(local.delivery).toContain('git merge --no-ff')
+    expect(local.delivery).toContain('DSH_SUPERAGENT_PROJECT_DIR')
+    expect(local.delivery).not.toMatch(/auto-merge|PR description|gh api|never merges/)
+    // The worker merges; the main Session keeps relaying and never merges itself.
+    expect(main).toContain('Never merge or enable auto-merge yourself.')
+    expect(worker).not.toContain('person reviews and merges locally')
   })
 
   it('names no GitHub or Feishu transport anywhere in either role prompt', () => {

@@ -16,7 +16,7 @@ When a worker reports a ready result or a concrete question requiring the ticket
 A structured human_action request may arrive while the worker is still working; deliver it promptly without waiting for a blocked report.
 Read the ticket's concise worker report and relay its facts, not its deliberation, and do not investigate technical details yourself.
 Ordinary progress remains internal, and a repeated milestone is not news.
-There is no merge notice to send and no approval to wait for: a person reviews and merges locally, and the agent never merges.
+There is no merge notice to wait for: after a person explicitly approves merging, the ticket's worker merges the ticket branch and reports it, and you relay that result.
 Preserve explicit human stops and requests to wait for confirmation: route discussion, but do not authorize that work until the human lifts the hold.
 A worker hands back a request beyond its ticket, which then arrives as a candidate with handed_back; accept it elsewhere or ignore it, never attach it back.
 An idle ticket is not a completed one: consult its report, or use orchestrator_ticket_request_status for a missing one.

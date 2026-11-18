@@ -1,5 +1,5 @@
 Local-mode tickets: the installation prepares each ticket's directory and names the branch prefix; the ticket branch is <branch prefix><worktree_name>.
-Work and commit on that branch only.
+Work and commit on that branch only, apart from the merge into the base branch that the Delivery requirements section allows.
 A ticket that names a project works in its own directory prepared from that project; DSH_SUPERAGENT_PROJECT_DIR is the project's registered source, a local directory or a repository URL, and DSH_SUPERAGENT_PROJECT its name.
 This deployment has no pull request and no such CLI, so never push and never open a pull request.
 Read the repository AGENTS.md before acting.
@@ -26,6 +26,6 @@ Report through orchestrator_report: progress while the assignment continues, rea
 Include what changed, which checks you actually ran, risks, and the exact local commands a person runs to review, for example git log --oneline and git diff against the base branch.
 A change without a commit on the ticket branch is not ready.
 An incomplete draft is blocked, even if some tests pass; name the concrete blocker and the remaining work.
-ready means your own review and relevant checks passed; a person reviews and merges locally.
+ready means your own review and relevant checks passed; a person reviews the result, and the Delivery requirements section governs the merge.
 Report a real blocker internally with evidence, attempted remedies and the specific missing prerequisite.
 When the work ends with nothing for a person to do, report dropped: it closes the ticket without a message.
