@@ -16,7 +16,7 @@
 | 位置 | 上游 | 本地版 |
 | --- | --- | --- |
 | 入口 | GitHub 通知、飞书事件 | **主对话**：你在主 Session 里说的话就是请求（`src/sources/chat.ts`） |
-| 工单落在哪 | 一个仓库 + 一条 prepare 命令 | **项目注册表**：登记若干「名字 + 本地目录」，路由时选一个（`src/policy.ts` 的 `ProjectSchema`） |
+| 工单落在哪 | 一个仓库 + 一条 prepare 命令 | **项目注册表**：登记若干「名字 + 来源」，来源是本机目录或仓库链接，路由时选一个（`src/policy.ts` 的 `ProjectSchema`） |
 | 启动条件 | 必须 `gh` 登录且能 push | 没有仓库/CLI 即以本地模式启动（`src/deployment.ts`） |
 
 GitHub 与飞书两个 Source 代码都在，bundle 里默认 `disabled: true`；本地收件箱 Source 也在（同样默认关）。
@@ -45,12 +45,12 @@ dsh plugin --profile superagent add "link:$PWD"
 1. **设置 › 模型**：主 Session 和执行器各选一个模型。
 2. **设置 › 执行器 › 项目**：加行，填
    - 项目名：`webapp`（小写字母/数字/短横，路由时用它点名）
-   - 项目目录：`/root/src/webapp`（本机绝对路径）
-   - prepare 命令：**留空自动准备** —— git 仓库会为工单开一个工作树 `agent/$DSH_SUPERAGENT_NAME`，非 git 目录直接复制到工单目录；也可以自己写一条命令。
+   - 项目目录或仓库链接：`/root/src/webapp` 本机绝对路径，或 `https://github.com/me/webapp.git`、`git@github.com:me/webapp.git` 这样的仓库链接（链接里不要带密码）
+   - prepare 命令：**留空自动准备** —— 仓库链接克隆成工单目录，本机 git 仓库开一个工作树，两者都在 `agent/$DSH_SUPERAGENT_NAME` 分支上；非 git 目录直接复制；也可以自己写一条命令。
 3. 没有第 3 件：直接在主对话里说需求。
 
 于是：你在主对话说「在 webapp 里把 README 的 recieve 改成 receive」→ 主 Session 收到候选 →
-`orchestrator_route` 接单并点名 `project: webapp` → 工单目录 `<work>/webapp/<工单名>` 从 `/root/src/webapp` 准备 →
+`orchestrator_route` 接单并点名 `project: webapp` → 工单目录 `<work>/webapp/<工单名>` 从 `/root/src/webapp` 准备（填的是仓库链接就克隆） →
 执行器 Session 在那里改、跑检查、提交到 `agent/<名字>` 分支 → `orchestrator_report` 报告 →
 主 Session 把结果写进面板，并追加到 `<stateDir>/outbox/chat.md` → 人自己 review、合并。
 
@@ -61,7 +61,7 @@ dsh plugin --profile superagent add "link:$PWD"
 | `DSH_SUPERAGENT_DIR` | 工单目录（执行器 Session 的工作目录） |
 | `DSH_SUPERAGENT_NAME` | 工单短名，也是分支名后缀 |
 | `DSH_SUPERAGENT_PROJECT` | 路由选中的项目名 |
-| `DSH_SUPERAGENT_PROJECT_DIR` | 项目的登记目录（工单目录从它准备出来） |
+| `DSH_SUPERAGENT_PROJECT_DIR` | 项目登记的来源，本机目录或仓库链接（工单目录从它准备出来） |
 | `DSH_SUPERAGENT_BLOCKED_COMMANDS` | 这个执行环境禁用的命令 |
 
 ## 其它入口（默认关闭）
@@ -71,7 +71,8 @@ dsh plugin --profile superagent add "link:$PWD"
 
 ## 已知限制
 
-- 没有远程，所以没有 CI、没有 review 流水线：`ready` 只代表 agent 自检通过。
+- 不开 PR，所以没有 CI、没有 review 流水线：`ready` 只代表 agent 自检通过。
+- 仓库链接由执行器的 git 克隆：公开仓库直接可用，私有仓库要执行器能非交互取到凭据。
 - 主对话只有一个身份 `operator`，没有多人白名单。
 - 面板上的回复落在面板与 `outbox/chat.md`，不会作为消息再塞回对话。
 - `tests/sources.spec.ts` 里飞书事件消费者那条用例在整包并行跑时偶尔超时（子进程起得慢），单独跑稳定，与本地版改动无关。

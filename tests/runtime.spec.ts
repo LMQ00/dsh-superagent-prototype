@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import { bindScopeParent } from '@deepseek-ai/dsh-scope'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
@@ -1614,6 +1614,31 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
   await runtime.idle()
   expect(runs()).toBe(before + 2)
   expect(runtime.store.tickets.get(prepared.ticket.id)!.assignments.at(-1)).toMatchObject({ state: 'running' })
+})
+
+it('removes a directory a failed prepare command half built, so a retry prepares it again instead of starting there', async () => {
+  const runs = () => subprocess.spawn.mock.calls.filter(([spec]) => (spec as { argv: string[] }).argv[0] === 'sh').length
+  runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'git clone big' } })
+  answers['sh -c git clone big'] = new Error('Killed')
+  // A clone killed part-way has already created its directory and filled it with part of the repository.
+  const original = subprocess.spawn.getMockImplementation()!
+  subprocess.spawn.mockImplementationOnce((spec: { argv: readonly string[]; env?: Record<string, string> }) => {
+    const directory = spec.env?.DSH_SUPERAGENT_DIR
+    if (directory) { mkdirSync(join(directory, '.git'), { recursive: true }); writeFileSync(join(directory, 'partial'), 'x') }
+    return original(spec)
+  })
+  const before = runs()
+  const { ticket } = await acceptedTicket(feishu('41', '@bot 修 prepare 中断', { root_id: undefined }))
+  await runtime.idle()
+  const workspace = ticket.execution!.directory
+  expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.report).toMatchObject({ state: 'failed', summary: expect.stringContaining('Killed') })
+  expect(existsSync(workspace)).toBe(false)
+  delete answers['sh -c git clone big']
+  runtime.executor.resume()
+  runtime.engine.retryTicket(ticket.id)
+  await runtime.idle()
+  expect(runs()).toBe(before + 2)
+  expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)).toMatchObject({ state: 'running' })
 })
 
 it('launches a queued Assignment once when the host resumes, and gives a failed launch\'s slot back', async () => {

@@ -12,7 +12,7 @@ export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] =
   { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，也是执行目录的名字', en: 'The ticket\'s short name, also its directory\'s name' } },
   { key: 'DSH_SUPERAGENT_TICKET', ticket: true, description: { zh: '工单 id', en: 'The ticket id' } },
   { key: 'DSH_SUPERAGENT_PROJECT', ticket: true, description: { zh: '路由选中的项目名；没有选项目时为空', en: 'The project the router chose for this ticket; empty when it chose none' } },
-  { key: 'DSH_SUPERAGENT_PROJECT_DIR', ticket: true, description: { zh: '项目登记的本地目录，工单目录是从它准备出来的；没有选项目时为空', en: 'The registered directory of that project, from which the ticket directory was prepared; empty when the router chose none' } },
+  { key: 'DSH_SUPERAGENT_PROJECT_DIR', ticket: true, description: { zh: '项目登记的来源，本机目录或仓库链接，工单目录是从它准备出来的；没有选项目时为空', en: 'The registered source of that project, a local directory or a repository URL, from which the ticket directory was prepared; empty when the router chose none' } },
   { key: 'DSH_SUPERAGENT_BLOCKED_COMMANDS', description: { zh: '这个执行环境禁止调用的命令，以空格分隔；不要运行它们', en: 'Commands blocked in this execution environment, separated by spaces; never run them' } },
 ]
 export interface Variable { key: string; value: string; description: Localized; owner: string }

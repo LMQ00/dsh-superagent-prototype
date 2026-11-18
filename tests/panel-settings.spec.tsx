@@ -60,6 +60,26 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
     'settings/executor'])
 })
 
+it('accepts a repository URL where a project names its directory, and saves it as typed', async () => {
+  await mount()
+  await click(zh['tab.execution'])
+  await click(find(zh['tab.settings'], '.dt-status-head button'))
+  await click(zh.projectAdd)
+  // The project source takes an absolute path or a repository URL; the browser refuses anything else before saving.
+  const source = field<HTMLInputElement>(zh.projectPath)
+  expect(source.placeholder).toBe('https://github.com/me/webapp')
+  await type(field<HTMLInputElement>(zh.projectName), 'webapp')
+  for (const value of ['/srv/webapp', 'https://github.com/acme/webapp.git', 'git@github.com:acme/webapp.git']) {
+    await type(source, value)
+    expect(source.checkValidity()).toBe(true)
+  }
+  await type(source, 'src/relative')
+  expect(source.checkValidity()).toBe(false)
+  await type(source, 'https://github.com/acme/webapp.git')
+  await click(zh.save)
+  expect(server.settings.executor.projects).toEqual([{ name: 'webapp', path: 'https://github.com/acme/webapp.git', prepare: '' }])
+})
+
 it('loads configuration history on demand with localized changes, Source field labels and notified Tickets', async () => {
   server.history = { current: 3, policyVersion: 'abcdef1234567890', items: [{ revision: 3, savedAt: '2026-09-22T00:00:00Z',
     source: 'sync', policyVersion: 'abcdef1234567890', policyChanged: true, notified: [{ id: 't1', title: '修复回归' }], block: 'policy',
