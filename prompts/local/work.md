@@ -1,5 +1,5 @@
 Local-mode tickets: the installation prepares each ticket's directory and names the branch prefix; the ticket branch is <branch prefix><worktree_name>.
-Work and commit on that branch only.
+Work and commit on that branch only, apart from the merge into the base branch that the Delivery requirements section allows.
 A ticket that names a project works in its own directory prepared from that project; DSH_SUPERAGENT_PROJECT_DIR is the project's registered source, a local directory or a repository URL, and DSH_SUPERAGENT_PROJECT its name.
 This deployment has no pull request and no such CLI, so never push and never open a pull request.
 Read the repository AGENTS.md before acting.
