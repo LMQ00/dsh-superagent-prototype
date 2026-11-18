@@ -203,7 +203,7 @@ beforeEach(async () => {
     inspect: vi.fn(async () => ({ events: [] })),
   }
   jobs = jobRegistry()
-  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
+  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }), archivedSessionIds: [], unarchiveSession: vi.fn(async () => {}) }, permissionPresets: { set: () => {} }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT(), OTHER(), BOT()]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store); store.close()
@@ -215,6 +215,11 @@ beforeEach(async () => {
   deliveries.mockClear()
 })
 afterEach(async () => { expect(controller.prompt).not.toHaveBeenCalled(); await runtime?.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
+
+it('takes the main Session out of DSH\'s archive set, so the panel can open it', () => {
+  // DSH clears an archived Session the moment it becomes current: without this, opening the main Session shows a blank page.
+  expect((services.workspaceRegistry as { unarchiveSession: ReturnType<typeof vi.fn> }).unarchiveSession).toHaveBeenCalledWith(runtime.masterId)
+})
 
 it('relays an explicit member mention as a candidate and creates the ticket, acknowledgement, subscription and worker on accept', async () => {
   const { trigger, ticket, sessionId } = await acceptedTicket()

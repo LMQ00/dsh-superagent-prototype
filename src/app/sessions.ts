@@ -146,6 +146,9 @@ export class Sessions {
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
+    // A Session in DSH's archive set is cleared as soon as it becomes current, so the panel's button would open a blank page
+    // instead of the main Session. Unarchive it: the archive set is DSH's, and the main Session is the way into this installation.
+    if (role === 'orchestrator') await ctx.workspaceRegistry.unarchiveSession(id as SessionId)
     const settings = this.host.store.settings()
     await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
     await this.decorate(result.agent)
