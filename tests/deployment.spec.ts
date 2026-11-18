@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, defaultStateDir, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
@@ -40,13 +40,20 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 vi.setConfig({ testTimeout: 30_000 })
 
 describe('configuration schema', () => {
-  it('requires only the state directory and reads the editable fields through references', () => {
-    expect(() => Config({})).toThrow('stateDir')
-    const read = machineOf(Config({ stateDir: join(dir, 'state') }))
+  it('defaults the state directory under the dsh home and reads the editable fields through references', () => {
+    // An entry installed without configuration still starts: `stateDir` falls back to the dsh home's state/superagent.
+    const home = process.env.DSH_HOME
+    process.env.DSH_HOME = join(dir, 'home')
+    try { expect(defaultStateDir()).toBe(join(dir, 'home', 'state', 'superagent')) } finally {
+      if (home === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = home
+    }
+    const read = machineOf(Config({}))
     // Limits are volatile references that the loader updates in place and callers read when used.
     expect({ ...read, promptMaxChars: read.promptMaxChars.get(), admissionContextMaxPages: read.admissionContextMaxPages.get(),
       admissionContextTimeoutMs: read.admissionContextTimeoutMs.get() })
-      .toEqual({ stateDir: join(dir, 'state'), promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 })
+      .toEqual({ stateDir: defaultStateDir(), promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 })
+    expect(machineOf(Config(minimal())).stateDir).toBe(join(dir, 'state'))
     expect(() => Config(minimal({ stateDir: 'relative/dir' }))).toThrow()
     expect(() => Config(minimal({ stateDir: '~/dir' }))).toThrow()
   })

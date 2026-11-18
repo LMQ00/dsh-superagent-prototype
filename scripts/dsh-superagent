@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage a local dsh-superagent service (one DSH profile, default `superagent`) without affecting other tmux sessions.
+"""Manage a local dsh-superagent service (one DSH profile, default `web`, the profile `dsh web` boots) without affecting other tmux sessions.
 
 `status`, `start`, and `restart` exit 0 while the service runs normally; 1 when it is stopped, duplicated, unreachable, or
 reporting a runtime error, which `restart` may fix; 2 when it runs while a component such as a Source reports an error;
@@ -51,6 +51,8 @@ def serves(args, profile):
             matched = True
         elif not word.startswith('-'):
             words.append(word)
+            # `dsh <name>` boots the profile named `<name>`, as `dsh --profile <name>` does.
+            matched = matched or word == profile
     return matched and 'plugin' not in words
 
 
@@ -209,9 +211,9 @@ def start(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'])
-    parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'superagent',
-                        help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>.')
-    parser.add_argument('--url', default=os.environ.get('DSH_SUPERAGENT_URL') or 'http://127.0.0.1:3082',
+    parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'web',
+                        help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>. Default web, the profile dsh web boots.')
+    parser.add_argument('--url', default=os.environ.get('DSH_SUPERAGENT_URL') or 'http://127.0.0.1:3080',
                         help='Health-check URL; override after changing the profile port.')
     parser.add_argument('--timeout', type=float, default=60, help='Startup timeout in seconds.')
     parser.add_argument('--stop-timeout', type=float, default=300,

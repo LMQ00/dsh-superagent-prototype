@@ -20,7 +20,7 @@ function sleeper(ignoreInterrupt = false): number {
   sleepers.push(child)
   return child.pid!
 }
-const service = (pid: number, profile = 'superagent') => `${pid} node node /opt/my tools/dsh --profile ${profile} --no-open`
+const service = (pid: number, profile = 'web') => `${pid} node node /opt/my tools/dsh --profile ${profile} --no-open`
 /** Write active process lines (`pid ucomm args`) for the fake ps binary. Entries prefixed with `after:<pid> ` appear only after that PID exits. */
 const processes = (...lines: string[]) => writeFileSync(join(root, 'ps.txt'), lines.map(line => `${line}\n`).join(''))
 const started = (...lines: string[]) => writeFileSync(join(root, 'ps-started.txt'), lines.map(line => `${line}\n`).join(''))
@@ -67,9 +67,9 @@ const status = async (profile: string, url = 'http://127.0.0.1:9') =>
   JSON.parse((await run('status', '--profile', profile, '--url', url)).stdout) as { pids: number[]; manually_stopped: boolean }
 
 it('refuses to stop when two processes serve the profile, before it writes the stop marker', async () => {
-  processes(service(sleeper()), `${sleeper()} node node /opt/dsh --profile=superagent`)
+  processes(service(sleeper()), `${sleeper()} node node /opt/dsh --profile=web`)
   expect(await run('stop')).toMatchObject({ code: 1, stderr: expect.stringContaining('Multiple dsh-superagent processes found') })
-  expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(false)
+  expect(existsSync(join(control('web'), 'manually-stopped'))).toBe(false)
 })
 it('keeps a stop per profile', async () => {
   expect(await run('stop', '--profile', 'one')).toMatchObject({ code: 0, stdout: expect.stringContaining('Automatic recovery is paused') })
@@ -79,10 +79,15 @@ it('keeps a stop per profile', async () => {
   expect(skipped).toMatchObject({ code: 0, stdout: expect.stringContaining('Intentional stop is active') })
 })
 it('takes no `dsh plugin` command of the profile for its service', async () => {
-  const service = sleeper()
+  const pid = sleeper()
   processes(`${sleeper()} node node /opt/my tools/dsh plugin --profile superagent add link:/x`,
-    `${service} node node /opt/my tools/dsh --profile superagent --no-open`)
-  expect(await status('superagent')).toMatchObject({ pids: [service] })
+    `${service(pid, 'superagent')} node node /opt/my tools/dsh --profile superagent --no-open`)
+  expect(await status('superagent')).toMatchObject({ pids: [pid] })
+})
+it('takes `dsh web`, the boot of the web profile, for the web profile\'s service', async () => {
+  const pid = sleeper()
+  processes(`${pid} node node /opt/dsh web`)
+  expect(await status('web')).toMatchObject({ pids: [pid] })
 })
 it('records the service PID at start, and still refuses a second instance the scan finds', async () => {
   const url = await answering()
@@ -91,23 +96,23 @@ it('records the service PID at start, and still refuses a second instance the sc
   started(service(pid))
   const start = await run('start', '--url', url, '--timeout', '10')
   expect(start).toMatchObject({ code: 0, stdout: expect.stringContaining(`"pids": [\n    ${pid}\n  ]`) })
-  expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
+  expect(readFileSync(join(control('web'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
   const tmux = readFileSync(join(root, 'tmux.log'), 'utf8').split('---\n').find(call => call.startsWith('new-session'))!.split('\n')
   // The checkout's path, which has a space, is one argument, and the log path inside it is quoted for the shell.
   const checkout = realpathSync(root)
   expect(tmux).toEqual(expect.arrayContaining(['-P', '-F', '#{pane_pid}', '-c', checkout]))
-  const log = new RegExp(`>> '${checkout}/\\.artifacts/dsh-superagent-superagent-\\d{8}-\\d{6}-\\d+\\.log' 2>&1$`)
+  const log = new RegExp(`>> '${checkout}/\\.artifacts/dsh-superagent-web-\\d{8}-\\d{6}-\\d+\\.log' 2>&1$`)
   expect(tmux.find(word => word.startsWith('umask 077; exec '))).toMatch(log)
   const second = sleeper()
-  started(service(pid), `${second} node node /opt/dsh --profile superagent`)
+  started(service(pid), `${second} node node /opt/dsh --profile web`)
   const again = await run('start', '--url', url, '--timeout', '10')
   expect(again).toMatchObject({ code: 1, stderr: expect.stringContaining('Multiple dsh-superagent processes') })
-  expect(await status('superagent')).toMatchObject({ pids: [pid, second] })
+  expect(await status('web')).toMatchObject({ pids: [pid, second] })
 }, 20_000)
 it('waits only for the process it stopped', async () => {
   const pid = sleeper()
   // Another instance shows up once the stopped one ended.
-  processes(service(pid), `after:${pid} ${sleeper()} node node /opt/dsh --profile superagent`)
+  processes(service(pid), `after:${pid} ${sleeper()} node node /opt/dsh --profile web`)
   expect(await run('stop', '--stop-timeout', '5')).toMatchObject({ code: 0, stdout: expect.stringContaining('dsh-superagent stopped') })
 }, 20_000)
 it('keeps only the newest logs it wrote for the profile', async () => {
@@ -116,7 +121,7 @@ it('keeps only the newest logs it wrote for the profile', async () => {
   writeFileSync(join(root, 'pane'), `${pid}\n`)
   started(service(pid))
   mkdirSync(join(root, '.artifacts'), { recursive: true })
-  for (const profile of ['superagent', 'other']) for (let index = 0; index < 25; index++) {
+  for (const profile of ['web', 'other']) for (let index = 0; index < 25; index++) {
     const log = join(root, '.artifacts', `dsh-superagent-${profile}-20260901-0000${String(index).padStart(2, '0')}-1.log`)
     writeFileSync(log, '')
     utimesSync(log, 1_700_000_000 + index, 1_700_000_000 + index)
@@ -124,11 +129,11 @@ it('keeps only the newest logs it wrote for the profile', async () => {
   writeFileSync(join(root, '.artifacts', 'dsh-superagent-20260901-000000-1.log'), '')
   expect(await run('start', '--url', url, '--timeout', '10')).toMatchObject({ code: 0 })
   const logs = readdirSync(join(root, '.artifacts'))
-  const own = logs.filter(name => name.startsWith('dsh-superagent-superagent-')).sort()
+  const own = logs.filter(name => name.startsWith('dsh-superagent-web-')).sort()
   expect(own).toHaveLength(20)
   // The oldest went; the new one stays, with the newest earlier ones. Another profile's logs and older names stay.
-  expect(own).not.toContain('dsh-superagent-superagent-20260901-000000-1.log')
-  expect(own.filter(name => !name.startsWith('dsh-superagent-superagent-20260901-'))).toHaveLength(1)
+  expect(own).not.toContain('dsh-superagent-web-20260901-000000-1.log')
+  expect(own.filter(name => !name.startsWith('dsh-superagent-web-20260901-'))).toHaveLength(1)
   expect(logs.filter(name => name.startsWith('dsh-superagent-other-'))).toHaveLength(25)
   expect(logs).toContain('dsh-superagent-20260901-000000-1.log')
 }, 20_000)
@@ -170,20 +175,20 @@ it('restarts the service, and a restart whose graceful stop timed out does not k
   const restarted = await run('restart', '--url', url, '--timeout', '10', '--stop-timeout', '5')
   expect(restarted).toMatchObject({ code: 0, stdout: expect.stringContaining('dsh-superagent stopped.') })
   expect(restarted.stdout).not.toContain('Automatic recovery is paused')
-  expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(false)
-  expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
+  expect(existsSync(join(control('web'), 'manually-stopped'))).toBe(false)
+  expect(readFileSync(join(control('web'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
   // A service that does not stop in time is left running, and the next check may restart it.
   rmSync(join(root, 'launched'))
   processes(service(sleeper(true)))
   expect(await run('restart', '--url', url, '--timeout', '10', '--stop-timeout', '1'))
     .toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
-  expect(await status('superagent')).toMatchObject({ manually_stopped: false })
+  expect(await status('web')).toMatchObject({ manually_stopped: false })
 }, 20_000)
 it('refuses a second control operation while one holds the profile\'s lock', async () => {
-  mkdirSync(control('superagent'), { recursive: true })
+  mkdirSync(control('web'), { recursive: true })
   const held = join(root, 'held')
   const holder = spawn('python3', ['-c', `import fcntl, pathlib, time
-lock = open(${JSON.stringify(join(control('superagent'), 'operation.lock'))}, 'a')
+lock = open(${JSON.stringify(join(control('web'), 'operation.lock'))}, 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
 pathlib.Path(${JSON.stringify(held)}).touch()
 time.sleep(30)`], { stdio: 'ignore' })
@@ -208,7 +213,7 @@ it('starts the service in a new window of the profile\'s tmux session when the s
   started(service(pid))
   expect(await run('start', '--url', url, '--timeout', '10')).toMatchObject({ code: 0 })
   const calls = readFileSync(join(root, 'tmux.log'), 'utf8').split('---\n').map(call => call.split('\n'))
-  expect(calls.find(call => call[0] === 'new-window')).toEqual(expect.arrayContaining(['-t', '=dsh-superagent:']))
+  expect(calls.find(call => call[0] === 'new-window')).toEqual(expect.arrayContaining(['-t', '=dsh-web:']))
   expect(calls.some(call => call[0] === 'new-session')).toBe(false)
 }, 20_000)
 it('exits 1 when the started service does not answer in time, and leaves its process running', async () => {
@@ -220,15 +225,15 @@ it('exits 1 when the started service does not answer in time, and leaves its pro
   expect(() => process.kill(pid, 0)).not.toThrow()
 }, 20_000)
 it('does not signal a process that took the recorded service PID, and keeps a stop that timed out', async () => {
-  mkdirSync(control('superagent'), { recursive: true })
+  mkdirSync(control('web'), { recursive: true })
   const other = sleeper()
   processes(`${other} sleep sleep 60`)
-  writeFileSync(join(control('superagent'), 'service.pid'), `${other}\n`)
+  writeFileSync(join(control('web'), 'service.pid'), `${other}\n`)
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 0 })
   expect(() => process.kill(other, 0)).not.toThrow()
   // A service that does not stop in time keeps the stop, so recovery does not start it again.
-  rmSync(join(control('superagent'), 'manually-stopped'))
+  rmSync(join(control('web'), 'manually-stopped'))
   processes(service(sleeper(true)))
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
-  expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(true)
+  expect(existsSync(join(control('web'), 'manually-stopped'))).toBe(true)
 }, 20_000)
