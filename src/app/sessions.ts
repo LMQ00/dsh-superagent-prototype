@@ -195,7 +195,9 @@ export class Sessions {
     const target = this.mainFor(trigger)
     try { await this.prompt(target, requestId, text, 'steer') }
     catch (error) {
-      if (target === this.host.masterId || (error as { code?: string }).code !== 'session/not-found') throw error
+      // Keep a busy or held Session for a retry; a missing or unusable one reports home so the ordered queue never wedges.
+      const code = (error as { code?: string }).code
+      if (target === this.host.masterId || code === undefined || code === 'session/agent-busy' || code === 'session/writer-held') throw error
       await this.prompt(this.host.masterId, requestId, text, 'steer')
     }
   }
@@ -205,9 +207,8 @@ export class Sessions {
   isMain(sessionId: string): boolean {
     if (sessionId === this.host.masterId) return true
     const agent = this.ctx.agents.get(sessionId as SessionId)
-    return agent
-      ? this.bindings.get(agent)?.main === true || this.mainAgent(agent)
-      : this.host.store.get(KV.sessions.main(sessionId)) === true
+    const recorded = this.host.store.get(KV.sessions.main(sessionId)) === true
+    return agent ? this.bindings.get(agent)?.main === true || this.mainAgent(agent) || recorded : recorded
   }
   /** Whether `agent` is a root Session: not a subagent, and so able to be a main Session. */
   private rootAgent(agent: Agent): boolean {

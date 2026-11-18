@@ -124,7 +124,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
     if (closed.has(parent)) throw new Error('DRAINING: the Session admits no new subagents')
     const id = `child-${children.size + 1}`
     children.set(id, { parent, live: true, settled: Promise.withResolvers<void>() })
-    agents.set(id, { id, status: 'running', session: { header: { parentSession: parent } } } as never)
+    agents.set(id, { id, status: 'running', session: { header: { parentSession: parent, origin: 'subagent', delegationDepth: 1 } } } as never)
     return id
   }
   return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }

@@ -24,6 +24,9 @@ it('takes a person message in a second main Session, answers there, and ignores 
   await create({ sessionId: 'second-main' }); header('second-main', { agentPreset: ROUTER })
   await ctx.parallel('agent/created', { agent: h.agents.get('second-main') })
   expect(h.runtime.isMain('second-main')).toBe(true)
+  // The panel's project route takes the conversation as a main Session.
+  expect(await h.api('GET', 'conversation?session=second-main')).toMatchObject({ status: 200, body: { session: 'second-main', master: true } })
+  expect(await h.api('PUT', 'conversation', { session: 'second-main', project: null })).toMatchObject({ status: 200, body: { master: true } })
 
   ctx.emit('session/event', { id: 'second-main' }, message('m-real', 'Add a dark mode'))
   await vi.waitFor(() => expect(h!.runtime.store.triggers.get(chatTrigger('m-real', 'second-main', 'Add a dark mode', '').id)).toBeDefined())
@@ -65,4 +68,22 @@ it('answers in the conversation of a Trigger that outlived the application, resu
   h.runtime.sessions.relay('report:resumed', '{"kind":"worker_report"}', 'chat-second-1')
   await h.runtime.effects.idle('relay')
   expect(h.deliveries.mock.calls.at(-1)![0].sessionId).toBe('second-main')
+})
+
+it('reports home when a main Session cannot resume, without holding later reports behind it', async () => {
+  h = await startRuntime(store => {
+    store.set(KV.sessions.main('second-main'), true)
+    store.triggers.save({ id: 'chat-second-1', source: 'chat', threads: [{ source: 'chat', id: 'm-1' }], actor: { source: 'chat', id: 'operator' },
+      human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Add a dark mode', meta: { messageId: 'm-1', sessionId: 'second-main' } } as Trigger)
+  })
+  const resolve = h.controller.resolveAgent.getMockImplementation() as (id: string) => Promise<never>
+  h.controller.resolveAgent.mockImplementation(async (id: string) => {
+    if (id === 'second-main') return { error: { code: 'agent-preset/not-found' } } as never
+    return resolve(id)
+  })
+  h.runtime.sessions.relay('relay-a', '{"kind":"worker_report"}', 'chat-second-1')
+  h.runtime.sessions.relay('relay-b', '{"kind":"worker_report"}', 'no-such-trigger')
+  await h.runtime.effects.idle('relay')
+  expect(h.deliveries.mock.calls.map(([call]) => call.sessionId)).toEqual([h.runtime.masterId, h.runtime.masterId])
+  expect(h.runtime.effects.pending('relay')).toBe(false)
 })
