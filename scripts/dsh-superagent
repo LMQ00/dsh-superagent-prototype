@@ -41,19 +41,23 @@ def stopped(profile):
 
 def serves(args, profile):
     """Return whether command-line arguments belong to the main DSH service process for `profile`."""
-    words, matched, value = [], False, False
-    for word in args[1:]:
-        if value:
-            matched, value = matched or word == profile, False
-        elif word == '--profile':
-            value = True
-        elif word == '--profile=' + profile:
-            matched = True
+    # `ps` splits the command line on whitespace, so a path with spaces becomes several words. The dsh
+    # executable is the token named `dsh`, or `bin.js` when the launcher runs that script directly.
+    start = next((index for index, word in enumerate(args) if word.rsplit('/', 1)[-1] in ('dsh', 'bin.js')), len(args))
+    words, matched, option = [], False, ''
+    for word in args[start + 1:]:
+        if option:
+            # The value of a named option is not a positional argument.
+            matched, option = matched or (option == '--profile' and word == profile), ''
+        elif word in ('--profile', '--from-default-profile', '--patch'):
+            option = word
+        elif word.startswith('--profile='):
+            matched = word == '--profile=' + profile
         elif not word.startswith('-'):
             words.append(word)
-            # `dsh <name>` boots the profile named `<name>`, as `dsh --profile <name>` does.
-            matched = matched or word == profile
-    return matched and 'plugin' not in words
+    # `dsh <name>` boots the profile named `<name>`, as `dsh --profile <name>` does; only the first
+    # positional argument names the profile, so `dsh rescue --from-default-profile web` is no service.
+    return (matched or (bool(words) and words[0] == profile)) and 'plugin' not in words
 
 
 def ps(*options, check=False):

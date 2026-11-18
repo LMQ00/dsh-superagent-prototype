@@ -1,5 +1,5 @@
-# Example entries for $DSH_HOME/profiles/web/cordis.patch.yml: append them to the file the profile already has.
-# See docs/006-deployment.md.
+# Example entries for $DSH_HOME/profiles/web/cordis.patch.yml. Replace that file's empty list `[]` with them,
+# or add them to the list it already holds. See docs/006-deployment.md.
 #
 # The profile's webserver listens on 127.0.0.1:3080. Add this entry to change the host or port.
 # - id: webserver

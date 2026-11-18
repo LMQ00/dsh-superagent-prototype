@@ -85,7 +85,7 @@ The last command installs this bundle into the `web` profile, so the panel appea
 
 ## Machine configuration
 
-Append the entries you need from [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/web/cordis.patch.yml`, which already holds the profile's own settings. The example file lists them commented, each with its default. Replace every `<placeholder>` you uncomment. For Feishu, also enable the `dsh-superagent-feishu` entry there. A `webserver` entry changes the panel's host or port from `127.0.0.1:3080`.
+Add the entries you need from [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/web/cordis.patch.yml`. That file starts as an empty list, `[]`: replace the `[]` with these entries, or add them to the list it already holds. The example file lists them commented, each with its default. Replace every `<placeholder>` you uncomment. For Feishu, also enable the `dsh-superagent-feishu` entry there. A `webserver` entry changes the panel's host or port from `127.0.0.1:3080`.
 
 | Key | Required | Meaning |
 | --- | --- | --- |

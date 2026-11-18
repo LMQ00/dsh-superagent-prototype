@@ -89,6 +89,13 @@ it('takes `dsh web`, the boot of the web profile, for the web profile\'s service
   processes(`${pid} node node /opt/dsh web`)
   expect(await status('web')).toMatchObject({ pids: [pid] })
 })
+it('takes no other argument equal to the profile, such as the value of `--from-default-profile`, for its service', async () => {
+  const pid = sleeper()
+  processes(`${sleeper()} node node /opt/dsh rescue --from-default-profile web`,
+    `${sleeper()} node node /opt/dsh headless web`,
+    `${service(pid)} node node /opt/dsh --profile web --no-open`)
+  expect(await status('web')).toMatchObject({ pids: [pid] })
+})
 it('records the service PID at start, and still refuses a second instance the scan finds', async () => {
   const url = await answering()
   const pid = sleeper()
