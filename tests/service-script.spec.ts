@@ -96,6 +96,14 @@ it('takes no other argument equal to the profile, such as the value of `--from-d
     `${service(pid)} node node /opt/dsh --profile web --no-open`)
   expect(await status('web')).toMatchObject({ pids: [pid] })
 })
+it('refuses the profile DeepSeek Harness Desktop owns, in any case', async () => {
+  for (const profile of ['desktop', 'Desktop']) for (const action of ['status', 'start', 'stop']) {
+    expect(await run(action, '--profile', profile)).toMatchObject({ code: 1,
+      stderr: expect.stringContaining('DeepSeek Harness Desktop owns the desktop profile') })
+  }
+  // The refusal happens before the script writes any control file for that profile.
+  expect(existsSync(join(control('desktop'), 'operation.lock'))).toBe(false)
+})
 it('records the service PID at start, and still refuses a second instance the scan finds', async () => {
   const url = await answering()
   const pid = sleeper()

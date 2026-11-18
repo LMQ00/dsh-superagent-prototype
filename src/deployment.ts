@@ -2,7 +2,7 @@
 import { LIMITS } from './limits.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { join, posix, resolve, win32 } from 'node:path'
 import type { Volatile } from '@deepseek-ai/cordis'
 import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
@@ -11,19 +11,28 @@ import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
+/** Absolute path forms a state directory may take: a POSIX root, or a Windows drive or UNC path. */
+const ABSOLUTE: Readonly<Record<'posix' | 'win32', RegExp>> = { posix: /^\//, win32: /^(?:[A-Za-z]:[\\/]|\\\\[^\\])/ }
 /** `<DSH home>/state/superagent`, the state directory an entry without `stateDir` uses. */
 export const defaultStateDir = (): string => join(resolve(process.env.DSH_HOME || join(homedir(), '.dsh')), 'state', 'superagent')
-/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
-export const Config = s.object({
-  stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories. Defaults to `state/superagent` under the dsh home.'),
-  promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
-    .description('Largest saved prompt configuration, in characters.').volatile(),
-  admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
-    .description('Pages of thread context one assessment may read.').volatile(),
-  admissionContextTimeoutMs: s.number().min(LIMITS.admissionContextTimeoutMs.min).max(LIMITS.admissionContextTimeoutMs.max).step(1)
-    .default(15000).description('Time limit of one context read during an assessment, in milliseconds.').volatile(),
-})
+/**
+ * Plugin configuration of the dsh-superagent entry, for one host platform.
+ * Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin.
+ */
+export function configSchema(platform: NodeJS.Platform = process.platform) {
+  const absolute = s.string().pattern(ABSOLUTE[platform === 'win32' ? 'win32' : 'posix'])
+  return s.object({
+    stateDir: absolute.description('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories. Defaults to `state/superagent` under the dsh home.'),
+    promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
+      .description('Largest saved prompt configuration, in characters.').volatile(),
+    admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
+      .description('Pages of thread context one assessment may read.').volatile(),
+    admissionContextTimeoutMs: s.number().min(LIMITS.admissionContextTimeoutMs.min).max(LIMITS.admissionContextTimeoutMs.max).step(1)
+      .default(15000).description('Time limit of one context read during an assessment, in milliseconds.').volatile(),
+  })
+}
+/** This host's plugin configuration. */
+export const Config = configSchema()
 export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
   stateDir: string
@@ -60,22 +69,50 @@ export interface Deployment extends Machine {
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
 
+/**
+ * The files a command name may name: itself, then its `PATHEXT` forms on Windows, in each PATH directory.
+ * @param name - a command name, or an absolute path to the executable.
+ * @param path - the PATH to search, split by the platform's separator.
+ * @param platform - the host whose path syntax and executable extensions apply.
+ * @param pathext - the Windows `PATHEXT` value; the system default applies when empty.
+ * @returns candidates in search order.
+ */
+export function commandCandidates(name: string, path: string, platform: NodeJS.Platform = process.platform,
+  pathext = process.env.PATHEXT ?? ''): string[] {
+  const paths = platform === 'win32' ? win32 : posix
+  const separator = platform === 'win32' ? ';' : ':'
+  if ((name.includes('/') || name.includes('\\')) && !paths.isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
+  const extension = platform === 'win32' && !/\.[A-Za-z0-9]+$/.test(name)
+    ? (pathext || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(item => name + item)
+    : []
+  const names = [name, ...extension]
+  return paths.isAbsolute(name) ? names
+    : path.split(separator).filter(dir => paths.isAbsolute(dir)).flatMap(dir => names.map(file => paths.join(dir, file)))
+}
+
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
-export function executable(name: string, path: string, exclude?: string): string {
-  if (name.includes('/') && !isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
-  const candidates = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
+export function executable(name: string, path: string, exclude?: string, platform: NodeJS.Platform = process.platform,
+  pathext = process.env.PATHEXT ?? ''): string {
+  const paths = platform === 'win32' ? win32 : posix
+  const absolute = paths.isAbsolute(name)
+  const candidates = commandCandidates(name, path, platform, pathext)
+    .filter(candidate => absolute || !exclude || !sameDirectory(paths.dirname(candidate), exclude))
   for (const candidate of candidates) {
     try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate } }
     catch { /* Not an executable file here; try the next PATH directory. */ }
   }
-  throw new Error(`${name} is not an executable file${isAbsolute(name) ? '' : ' on PATH'}`)
+  throw new Error(`${name} is not an executable file${paths.isAbsolute(name) ? '' : ' on PATH'}`)
 }
 
-export type Probe = (argv: string[]) => Promise<string>
-/** Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper script reaches the real binary. */
+/** Runs one CLI for a setup check, with variables that adjust the CLI's own output. */
+export type Probe = (argv: string[], env?: Record<string, string>) => Promise<string>
+/**
+ * Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper script reaches the real binary.
+ * The probe passes PATH and its own variables as the child's environment rather than through the POSIX `env` command, which Windows does not have.
+ */
 export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
-  return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...argv], cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  return (argv, env) => runAsWorker(subprocess, argv, cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]), { PATH: path, ...env })
 }
 
 const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.number().int().positive() })
@@ -122,7 +159,7 @@ export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe:
   const fail = (error: unknown): never => { throw error instanceof SetupError ? error : new SetupError('feishuCliFailed', { output: reason(error) }) }
   let cli = ''
   try { cli = executable(name, path, workerBin(machine.stateDir)) } catch (error) { fail(error) }
-  const run = (...args: string[]): Promise<string> => probe(['env', 'LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1', 'LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1', cli, ...args]).catch(fail)
+  const run = (...args: string[]): Promise<string> => probe([cli, ...args], { LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' }).catch(fail)
   const text = await run('auth', 'status')
   const status = parsed(AuthStatus, text.slice(text.indexOf('{')))
   if (!status) return fail(new SetupError('feishuNoApp'))

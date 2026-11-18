@@ -76,12 +76,14 @@ Run this block once:
 npm install -g @deepseek-ai/dsh@0.2.1-rc.3
 git clone <this repository> dsh-superagent && cd dsh-superagent
 pnpm install && pnpm build
-dsh plugin --profile web add "link:$PWD"
+node scripts/install.mjs
 ```
 
 The pinned version above is public; other versions must satisfy `engines.dsh` in `package.json`.
 
-The last command installs this bundle into the `web` profile, so the panel appears in the GUI that `dsh web` serves on `127.0.0.1:3080`. `dsh plugin` creates the profile from the Web template on a machine that has none. Restart `dsh web` once so the profile loads the new bundle. Set `DSH_HOME` to relocate the default `~/.dsh` directory.
+The last command installs this bundle into the profile that runs the current session (`DSH_PROFILE`): the `web` profile under `dsh web`, so the panel appears in the GUI that `dsh web` serves on `127.0.0.1:3080`, and the `desktop` profile under DeepSeek Harness Desktop. `--profile <name>` installs into another profile. Restart the profile's Host once so it loads the new bundle. Set `DSH_HOME` to relocate the default `~/.dsh` directory.
+
+On a machine that has no profile yet, create one first: `dsh superagent --from-default-profile web` makes a `web` profile from the DeepSeek Harness Web template. Run that command only for a new installation. If the profile already exists, it replaces the profile and deletes its `cordis.patch.yml`, including machine configuration.
 
 ## Machine configuration
 

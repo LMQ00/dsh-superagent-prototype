@@ -24,13 +24,15 @@ command -v lark-cli
 grep -l '"dsh-superagent"' "${DSH_HOME:-$HOME/.dsh}"/profiles/*/package.json 2>/dev/null
 ```
 
-- **Prerequisites:** Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux, Python 3.8+, GitHub CLI 2.48+, and DSH within the `engines.dsh` range of `package.json`. A missing one becomes an item of the plan, not a question. DSH also needs a model provider; if the operator has never run DSH with a model, configuring one is an operator step.
+- **Prerequisites:** Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux, Python 3.8+, GitHub CLI 2.48+, and DSH within the `engines.dsh` range of `package.json`. A missing one becomes an item of the plan, not a question. DSH also needs a model provider; if the operator has never run DSH with a model, configuring one is an operator step. The Desktop application brings DSH itself, so `dsh` and its model provider are already there; `pnpm` is still needed to build the checkout, and nothing in the Desktop setup uses tmux or Python.
 - **Operator login:** the `gh api user` result is the operator's own GitHub login, used as the recommendation in question 5.
 - **Existing profile:** a profile whose bundles list `dsh-superagent` is an earlier setup: ask whether to continue it, keep its configuration, and read Upgrade in `docs/006-deployment.md`.
 
 ## 2. Questions
 
 Ask in this order, one per message, following the flow of work in [docs/001-domain.md](docs/001-domain.md): first where Triggers come from, then who may ask for work there, then what the Executor does with a Ticket. Recommendations are in brackets.
+
+Before the numbered questions, ask **where the agent runs:** in DeepSeek Harness Desktop, or in a DeepSeek Harness profile that `dsh web` serves? [The profile you already open, unless you work in the Desktop application.] The Desktop application starts and stops its own Host, so the installation differs.
 
 **Sources: where requests come from.**
 
@@ -52,8 +54,8 @@ Ask in this order, one per message, following the flow of work in [docs/001-doma
 
 Do not ask about values with a good default; list them in the plan instead:
 
-- profile `web`, the one `dsh web` boots, so the Superagent panel appears at the operator's usual `http://127.0.0.1:3080`; state directory `<home>/.dsh/state/superagent`, its default;
-- an hourly check from another DSH profile, which restarts the `web` profile when dsh-superagent is not running;
+- profile `web`, the one `dsh web` boots, so the Superagent panel appears at the operator's usual `http://127.0.0.1:3080`; under DeepSeek Harness Desktop, the `desktop` profile the application owns; state directory `<home>/.dsh/state/superagent`, its default;
+- an hourly check from another DSH profile, which restarts the `web` profile when dsh-superagent is not running; with the Desktop application the check is left out, because that application starts its Host itself;
 - branch prefix `agent/`;
 - accept mode `observe`, which records proactive work without doing it, and the default rules and prompt sections;
 - with Feishu: the bot reads only mentions, and direct messages are on.
@@ -65,15 +67,15 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 ## 4. Execute
 
 1. **Operator steps first.** Read the Accounts section of `docs/006-deployment.md`, write the CLI wrappers yourself, then send one message with what only the operator can do: create the agent account and, with auto-merge, sign a CLI in as the account that enables it, accept the repository invitation as the agent account, run `auth login` for each wrapper, and for Feishu create and publish the bot app and run the `config init` command with its secret. Wait until the operator says it is done, then check each login with `<wrapper> api user --jq .login`.
-2. **Install and start.** Follow the Install, Machine configuration, and Start and stop sections of `docs/006-deployment.md`. Skip the `git clone` of this repository: you are in its checkout. Clone the repository of question 2 if question 7 asked for a new clone. The install adds this bundle to the `web` profile; its machine configuration goes into that profile's `cordis.patch.yml`.
+2. **Install and start.** Follow the Install, Machine configuration, and Start and stop sections of `docs/006-deployment.md`. Skip the `git clone` of this repository: you are in its checkout. Clone the repository of question 2 if question 7 asked for a new clone. With an existing profile, skip the `dsh superagent --from-default-profile` command, which would replace the profile and delete its `cordis.patch.yml`, and edit the file instead of replacing it. Install the bundle with `node scripts/install.mjs`: it installs into the profile that runs this session (`DSH_PROFILE`), which is `web` under `dsh web` and `desktop` under DeepSeek Harness Desktop; use `--profile <name>` to install for another profile. Its machine configuration goes into that profile's `cordis.patch.yml`; `stateDir` is optional and defaults to `<home>/.dsh/state/superagent`, so set it only to use another directory. With the Desktop application skip `scripts/dsh-superagent`, which manages a CLI profile. On Windows, that state directory is a drive or UNC path, and the agent CLI wrapper is a `.cmd` file.
 3. **Settings.** Save them through the Management API of `docs/006-deployment.md`, in this order: the `github` Source, the `feishu` Source if used, the `policy` block with the allowed lists (for Feishu, look up the chat ids with the bot's CLI first), and the `executor` block with a prepare command from the answer to question 7. Then save the prompts with the commit identity of question 8 and the auto-merge answer of question 9 in Delivery requirements. A save that returns `restarting: true` restarts dsh-superagent: wait until `scripts/dsh-superagent status` no longer exits 1 before the next request, and read the revisions again from `GET settings`.
 4. **Failures.** A refused save names the setup problem in its response body. Find it in the Troubleshooting table of `docs/006-deployment.md`, fix it, and continue. Ask the operator only for what you cannot fix yourself.
 
 ## 5. Verify and hand over
 
-`scripts/dsh-superagent status` exits 0 with no setup problem. Create the hourly check of the Hourly check section of `docs/006-deployment.md` in a DSH profile other than `web` with your schedule tool, or give the operator its prompt to schedule there. Then send one message, under 300 words:
+`scripts/dsh-superagent status` exits 0 with no setup problem; in DeepSeek Harness Desktop, the panel's Overview shows no setup problem after the application opens, and there is no service to recover because that application starts its Host itself. If you run in a DSH profile of your own, create the hourly check of the Hourly check section of `docs/006-deployment.md` in a DSH profile other than `web` with your schedule tool; otherwise give the operator its prompt to schedule there. Then send one message, under 300 words:
 
-- The panel URL, and that the **Superagent** entry in the sidebar is where to look.
+- The panel URL, or with the Desktop application, that **Superagent** in the sidebar opens it.
 - How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in the repository. A Ticket appears on the overview within about a minute.
 - Three rules for the operator, from the Responsibility section of `docs/000-philosophy.md`: start narrow, tune for less noise, own what the agent says.
 - Where to read more: the numbered documents in `docs/`, in order.
