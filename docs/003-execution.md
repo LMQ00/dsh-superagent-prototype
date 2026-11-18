@@ -81,7 +81,7 @@ These wrappers and directories establish defaults, not a security boundary. A wo
 
 ## Merging
 
-Auto-merge is governed by the **Delivery requirements** prompt. The host has no merge-specific decision logic.
+Auto-merge is governed by the **Delivery requirements** prompt. The host has no merge-specific decision logic; an installation without a repository can put another rule there, such as the worker merging into a local base branch after a person approves.
 
 By default, the Executor never enables auto-merge as the agent account: GitHub attributes the merge to whoever enabled it. Delivery requirements must name another account's CLI for merging. Without one, people merge the pull request.
 
