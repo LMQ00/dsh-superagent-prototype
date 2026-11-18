@@ -26,7 +26,7 @@ export interface SourceHost {
   readonly sources: SourceRegistry
   /** The home main Session: where reports go that belong to no other main Session's conversation. */
   readonly masterId: string
-  /** Whether `sessionId` is a main Session: the home one, or a Session that runs the superagent main Session preset. */
+  /** Whether `sessionId` is a main Session: the home one, or a root Session that runs the superagent main Session preset. */
   isMain(sessionId: string): boolean
   /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
   context(kind: { kind: string; health: readonly string[] }): SourceContext

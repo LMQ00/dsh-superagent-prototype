@@ -517,7 +517,7 @@ The main Session also has DeepSeek Harness's `skill`, `bash`, `read`, `read_imag
 
 ### Presets and wait limits
 
-New main Sessions use `dsh-superagent-router` (`ROUTER_PRESET`): the home main Session the installation creates at startup, and any Session that selects this preset before its first turn. `Sessions` decorates each of them with the main Session's prompt, tools and skills when the preset registry reports the selection. Shell commands and job waits return after 5 seconds. If the Web UI selects another preset for the home Session or an Executor Session before the first turn, `Sessions` restores this preset, or `WORKER_PRESET` for a worker; a main Session that selects another preset before its first turn stops being one.
+New main Sessions use `dsh-superagent-router` (`ROUTER_PRESET`): the home main Session the installation creates at startup, and any Session that selects this preset before its first turn. `Sessions` decorates each of them with the main Session's prompt, tools and skills when the preset registry reports the selection. A subagent is not a main Session. Shell commands and job waits return after 5 seconds. If the Web UI selects another preset for the home Session or an Executor Session before the first turn, `Sessions` restores this preset, or `WORKER_PRESET` for a worker; a main Session that selects another preset before its first turn stops being one.
 
 The `noWait` guard in `src/app/sessions.ts` refuses main-Session shell commands that invoke `sleep` at a command position, shell `timeoutMs` above 30 seconds, and `job_output` waits above 5 seconds. Reports and job results arrive automatically, so waiting only delays incoming candidates.
 

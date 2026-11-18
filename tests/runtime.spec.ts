@@ -1777,6 +1777,23 @@ it('takes a Session that selects the main Session preset as a main Session, and 
   expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
 })
 
+it('does not take a subagent of a main Session as a main Session, whatever preset its header names', async () => {
+  // DSH records the parent's Session id in a subagent's header; a provider may also copy a preset into it.
+  await (controller.create as unknown as (options: { sessionId: string; agentPreset: string }) => Promise<void>)({ sessionId: 'child-of-home', agentPreset: 'dsh-superagent-router' })
+  const child = agents.get('child-of-home')! as unknown as { session: { header: Record<string, unknown> } }
+  child.session.header = { parentSession: runtime.masterId, agentPreset: 'dsh-superagent-router' }
+  await (runtime as unknown as { ctx: Context }).ctx.parallel('agent/created', { agent: child } as never)
+  expect(runtime.isMain('child-of-home')).toBe(false)
+  expect(tools.get('child-of-home')?.has('orchestrator_route')).toBe(false)
+  // A Trigger its conversation started reports to the home Session, as one from any Source without a main Session does.
+  const trigger: Trigger = { id: 'chat-child-1', source: 'chat', threads: [{ source: 'chat', id: 'm-child' }], actor: { source: 'chat', id: 'operator' },
+    human: true, addressed: 'direct', at: '2026-09-09T00:00:00.000Z', text: 'Do the task my parent gave me', meta: { messageId: 'm-child', sessionId: 'child-of-home' } }
+  runtime.store.triggers.save(trigger)
+  runtime.sessions.relay('relay-child', '{"kind":"worker_report"}', trigger.id)
+  await runtime.effects.idle('relay')
+  expect(deliveries.mock.calls.at(-1)![0].sessionId).toBe(runtime.masterId)
+})
+
 it('gives a subagent of a worker only the worker\'s work tools, and none once the ticket ended', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   // DSH creates the subagent under the standard preset, with the worker's Session as its parent.

@@ -177,7 +177,7 @@ export class Runtime extends Service implements SourceHost {
   /** Aborted when dsh-superagent stops or loses its state directory lock, cancelling running reads and subprocesses. */
   get lifetime(): AbortSignal { return this.stopped.signal }
   context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
-  /** Whether `sessionId` is a main Session: the home one, or a Session that runs the superagent main Session preset. */
+  /** Whether `sessionId` is a main Session: the home one, or a root Session that runs the superagent main Session preset. */
   isMain(sessionId: string): boolean { return this.sessions.isMain(sessionId) }
   /** Resolved deployment; throws while waiting for setup (`!configured()`). */
   get deployment(): Deployment { return this.setup.deployment }
@@ -241,7 +241,8 @@ export class Runtime extends Service implements SourceHost {
     try {
       this.assessor.stop()
       const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
-      const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
+      const agents = [...new Set([...this.sessions.mainSessions(), ...ids.map(id => this.ctx.agents.get(id as SessionId))])]
+        .filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
       // The workers' jobs and subagents stop too: their ends would start worker turns without the tool limits released below.

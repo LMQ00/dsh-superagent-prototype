@@ -141,7 +141,7 @@ export class Sessions {
           return
         }
         if (!agent) return
-        if (preset === ROUTER_PRESET) { if (!this.bindings.has(agent)) void this.decorate(agent, true); return }
+        if (preset === ROUTER_PRESET) { if (agent.session.header?.parentSession === undefined && !this.bindings.has(agent)) void this.decorate(agent, true); return }
         if (this.bindings.get(agent)?.main) this.release(agent)
       })
     })
@@ -185,11 +185,17 @@ export class Sessions {
   }
   /** The id of the message `prompt` delivers under `requestId`, which DSH's inbox events name it by. */
   promptedId(requestId: string): MessageId { return messageId(key(requestId)) }
-  /** Whether `sessionId` is a main Session: the home Session, or any Session that runs the router preset. */
+  /** The decorated main Sessions, the home one included, whose turns a shutdown cancels. */
+  mainSessions(): Agent[] { return [...this.bindings].filter(([, binding]) => binding.main).map(([agent]) => agent) }
+  /** Whether `sessionId` is a main Session: the home Session, or a root Session that runs the router preset. */
   isMain(sessionId: string): boolean {
     if (sessionId === this.host.masterId) return true
     const agent = this.ctx.agents.get(sessionId as SessionId)
-    return !!agent && (this.bindings.get(agent)?.main === true || this.routed(agent))
+    return !!agent && (this.bindings.get(agent)?.main === true || this.mainAgent(agent))
+  }
+  /** Whether `agent` is the home Session or a root Session that runs the router preset; a subagent is none, whatever preset its header names. */
+  private mainAgent(agent: Agent): boolean {
+    return agent.id === this.host.masterId || (agent.session.header?.parentSession === undefined && this.routed(agent))
   }
   /**
    * The main Session a message about trigger `triggerId` belongs in: the Session whose conversation started the trigger,
@@ -263,7 +269,7 @@ export class Sessions {
     const ticketId = ticketOfSession(agent.id)
     return ticketId === undefined ? undefined : this.host.store.tickets.get(ticketId)
   }
-  private async decorate(agent: Agent, main = agent.id === this.host.masterId || this.routed(agent)): Promise<void> {
+  private async decorate(agent: Agent, main = this.mainAgent(agent)): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
     const ticket = main ? undefined : this.ticketOf(agent)
