@@ -610,13 +610,17 @@ interface Executor {
   /** End an assignment's work, such as cancelling its Session's turn; called after the ticket or assignment has already ended in the domain. */
   stop(ticket: Ticket, assignment: Assignment, reason: string): void;
 }
-/** A message for a Channel; `ticketId` names the Ticket it is for, when there is one. */
+/**
+ * A message for a Channel; `ticketId` names the Ticket it is for, when there is one, and `sessionId` the main Session
+ * whose conversation is that Channel, when a chat Channel names one.
+ */
 interface OutboundMessage {
   id: string;
   channel: ChannelRef;
   text: string;
   kind: 'acknowledgement' | 'reply' | 'notice';
   ticketId?: string;
+  sessionId?: string;
 }
 /** A queued message waits (`pending`), went out (`sent`), or was dropped because its conversation can never receive it (`dropped`). */
 type ReplyStatus = 'pending' | 'sent' | 'dropped';
