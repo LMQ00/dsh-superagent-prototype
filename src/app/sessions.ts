@@ -107,7 +107,7 @@ export class Sessions {
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
   private readonly retryHealth = new RetryHealth()
-  /** Messages a reply queued for a Session whose open step still holds unanswered tool calls, shown after that step ends. */
+  /** Messages a reply queued for a Session whose turn is still open, shown once that turn ends or the Session is reopened. */
   private readonly waitingSpeech = new Map<string, Speech[]>()
   private readonly ctx: Context
   /** Registers ordered `relay` and `notice` effect handlers that deliver to the main Session. */
@@ -129,7 +129,7 @@ export class Sessions {
       const agent = ctx.agents.get(session.id)
       const binding = agent && agent.session === session ? this.bindings.get(agent) : undefined
       if (!agent) return
-      if (agent.session === session && (event.type === 'step/end' || event.type === 'turn/end')) this.flushSpeech(agent, event)
+      if (agent.session === session && event.type === 'turn/end') this.flushSpeech(agent.id)
       if (!binding || binding.subagent) return
       this.retryHealth.observe(agent.id, event)
       this.updateModelHealth()
@@ -156,8 +156,7 @@ export class Sessions {
     })
     ctx.on('agent/status', ({ agent, status }) => {
       if (status !== 'idle') return
-      // A reply that waited for a step still shows when the Session goes idle without one.
-      this.flushSpeech(agent, { type: 'turn/end', data: { turn: this.lastStep(agent.session.snapshotEvents())?.turn ?? 0 } })
+      this.flushSpeech(agent.id)
       if (!this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
     })
   }
@@ -213,40 +212,57 @@ export class Sessions {
   }
   /**
    * Show a reply as the main Session's own message in the conversation it went to. A local installation has no chat
-   * transport: its chat Channel is the person's conversation, so the message is written there. A message whose open step
-   * still holds unanswered tool calls waits for that step to end, so an assistant message never separates a call from its
-   * result. Each message id is shown once.
+   * transport: its chat Channel is the person's conversation, so the message is written there. It waits for the Session's
+   * open turn to end, so it never lands between a tool call and its result nor ends the next request. Each message id is
+   * shown once.
    */
   speak(sessionId: string, requestId: string, text: string): void {
-    const agent = this.ctx.agents.get(sessionId as SessionId)
-    if (!agent || this.host.store.get(KV.sessions.spoken(requestId))) return
-    if (this.unansweredTool(agent)) {
-      const waiting = this.waitingSpeech.get(agent.id) ?? []
-      waiting.push({ requestId, text })
-      this.waitingSpeech.set(agent.id, waiting)
-      return
-    }
-    this.appendSpeech(agent, { requestId, text })
+    // A caller may run inside a Session publication, and an append there is refused.
+    queueMicrotask(() => { void this.show(sessionId, { requestId, text }) })
   }
-  /** Whether the Session's last assistant message holds a tool call whose result is not in the log yet. */
-  private unansweredTool(agent: Agent): boolean {
+  /** Shows one message in its conversation, restoring that Session first when it is not loaded. */
+  private async show(sessionId: string, speech: Speech): Promise<void> {
+    try {
+      if (this.host.store.get(KV.sessions.spoken(speech.requestId))) return
+      const loaded = this.ctx.agents.get(sessionId as SessionId)
+      const agent = loaded ?? await this.restore(sessionId)
+      if (!agent) return
+      if (!this.closedTurn(agent) || !this.appendSpeech(agent, speech)) this.queueSpeech(sessionId, speech)
+    } catch (error) { this.ctx.logger.warn('dsh-superagent could not show a reply in its conversation: %s', String(error)) }
+  }
+  /** The Session with this id, resumed from its log so a reply reaches a conversation the person has not opened since. */
+  private async restore(sessionId: string): Promise<Agent | undefined> {
+    const resolved = await this.ctx.sessionController.resolveAgent(sessionId as SessionId)
+    if ('error' in resolved) {
+      this.ctx.logger.warn('dsh-superagent did not show a reply, because Session %s could not be opened: %s', sessionId, String(resolved.error.message))
+      return undefined
+    }
+    return resolved.agent
+  }
+  /** Whether the Session's last turn ended, so a message appended now starts no request with an assistant message. */
+  private closedTurn(agent: Agent): boolean {
     const events = agent.session.snapshotEvents()
-    const answered = new Set<string>()
-    for (const event of events) if (event.type === 'tool/result') answered.add(event.data.message.toolCallId)
-    for (let index = events.length - 1; index >= 0; index--) {
-      const event = events[index]!
-      if (event.type !== 'assistant/message') continue
-      return event.data.message.content.some(block => block.type === 'tool-call' && !answered.has(block.id))
-    }
-    return false
+    return events.length === 0 || events.at(-1)!.type === 'turn/end'
   }
-  /** Shows the messages that waited for a step, once its results are in the log. */
-  private flushSpeech(agent: Agent, event: { type: 'step/end'; data: { turn: number; step: number } } | { type: 'turn/end'; data: { turn: number } }): void {
-    const waiting = this.waitingSpeech.get(agent.id)
-    if (!waiting) return
-    this.waitingSpeech.delete(agent.id)
-    const step = event.type === 'step/end' ? event.data.step : this.lastStep(agent.session.snapshotEvents())?.step
-    for (const speech of waiting) this.appendSpeech(agent, speech, event.data.turn, step)
+  private queueSpeech(sessionId: string, speech: Speech): void {
+    const waiting = this.waitingSpeech.get(sessionId) ?? []
+    waiting.push(speech)
+    this.waitingSpeech.set(sessionId, waiting)
+  }
+  /**
+   * Shows what waited for this Session, after the publication that announced its turn's end. A message that cannot be
+   * appended stays queued, so a later flush or its next opening shows it.
+   */
+  private flushSpeech(sessionId: string): void {
+    const waiting = this.waitingSpeech.get(sessionId)
+    if (!waiting?.length) return
+    this.waitingSpeech.delete(sessionId)
+    queueMicrotask(() => {
+      const agent = this.ctx.agents.get(sessionId as SessionId)
+      if (!agent) { for (const speech of waiting) this.queueSpeech(sessionId, speech); return }
+      const failed = waiting.filter(speech => !this.appendSpeech(agent, speech))
+      for (const speech of failed) this.queueSpeech(sessionId, speech)
+    })
   }
   /** The turn and step to anchor a message shown outside a step: those of the Session's latest event that carries both. */
   private lastStep(events: readonly { type: string; data: unknown }[]): { turn: number; step: number } | undefined {
@@ -256,9 +272,9 @@ export class Sessions {
     }
     return undefined
   }
-  /** Appends one assistant message carrying the message's text, at the given step or the Session's latest one. */
-  private appendSpeech(agent: Agent, speech: Speech, turn?: number, step?: number): void {
-    const boundary = turn !== undefined && step !== undefined ? { turn, step } : this.lastStep(agent.session.snapshotEvents())
+  /** Appends one assistant message carrying the message's text; `false` when the Session refused it. */
+  private appendSpeech(agent: Agent, speech: Speech): boolean {
+    const boundary = this.lastStep(agent.session.snapshotEvents())
     try {
       agent.session.append('assistant/message', {
         turn: boundary?.turn ?? 0, step: boundary?.step ?? 0,
@@ -266,9 +282,10 @@ export class Sessions {
         stream: [],
       }, { surfaceOp: 'append' })
       this.host.store.set(KV.sessions.spoken(speech.requestId), true)
+      return true
     } catch (error) {
-      // The message stays unshown and its receipt is already sent; a later retry of the same id shows it again if it can.
       this.ctx.logger.warn('dsh-superagent could not show a reply in its conversation: %s', String(error))
+      return false
     }
   }
   /** The decorated main Sessions, the home one included, whose turns a shutdown cancels. */
@@ -497,9 +514,6 @@ export class Sessions {
    * On demotion, also withdraws full access and the durable main record; a disposed main Session keeps both for its return.
    */
   private release(agent: Agent, demoted = false): void {
-    const waiting = this.waitingSpeech.get(agent.id)
-    this.waitingSpeech.delete(agent.id)
-    for (const speech of waiting ?? []) this.appendSpeech(agent, speech)
     const binding = this.bindings.get(agent)
     if (!binding) return
     this.bindings.delete(agent)
