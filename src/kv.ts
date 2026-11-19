@@ -36,7 +36,9 @@ export const KV = {
    * for a conversation, by Session id. */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:'),
     main: family<boolean, [session: string]>('session-main:'),
-    project: family<string | null, [session: string]>('session-project:') },
+    project: family<string | null, [session: string]>('session-project:'),
+    /** Whether a reply message has been shown in its conversation as the main Session's own message, by message id. */
+    spoken: family<boolean, [message: string]>('session-spoken:') },
   /** Schema 11 migration: legacy main-Session queues imported into the effect table. */
   queues: { relays: record<{ id: string; text: string }[]>('relay-queue'), unsubscribed: record<string[]>('subscription-results'),
     prompts: record<number | null>('prompt-notification'), settings: record<number | null>('settings-notification') },

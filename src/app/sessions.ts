@@ -1,7 +1,7 @@
 /** Lifecycle, prompt/tool/skill decoration, message delivery, and budget retry tracking for orchestrator and worker DSH sessions. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { MessageId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, type MessageId } from '@deepseek-ai/dsh-llm'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { dirname } from 'node:path'
@@ -52,6 +52,9 @@ interface SessionBinding {
   permissions?: string
   subagent?: true
 }
+
+/** One reply message waiting to be shown in its conversation. */
+interface Speech { requestId: string; text: string }
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
 export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
@@ -104,6 +107,8 @@ export class Sessions {
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
   private readonly retryHealth = new RetryHealth()
+  /** Messages a reply queued for a Session whose open step still holds unanswered tool calls, shown after that step ends. */
+  private readonly waitingSpeech = new Map<string, Speech[]>()
   private readonly ctx: Context
   /** Registers ordered `relay` and `notice` effect handlers that deliver to the main Session. */
   constructor(private readonly host: SessionsHost) {
@@ -123,7 +128,9 @@ export class Sessions {
     ctx.on('session/event', (session, event) => {
       const agent = ctx.agents.get(session.id)
       const binding = agent && agent.session === session ? this.bindings.get(agent) : undefined
-      if (!agent || !binding || binding.subagent) return
+      if (!agent) return
+      if (agent.session === session && (event.type === 'step/end' || event.type === 'turn/end')) this.flushSpeech(agent, event)
+      if (!binding || binding.subagent) return
       this.retryHealth.observe(agent.id, event)
       this.updateModelHealth()
     })
@@ -148,7 +155,10 @@ export class Sessions {
       })
     })
     ctx.on('agent/status', ({ agent, status }) => {
-      if (status === 'idle' && !this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
+      if (status !== 'idle') return
+      // A reply that waited for a step still shows when the Session goes idle without one.
+      this.flushSpeech(agent, { type: 'turn/end', data: { turn: this.lastStep(agent.session.snapshotEvents())?.turn ?? 0 } })
+      if (!this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
     })
   }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
@@ -199,6 +209,66 @@ export class Sessions {
       const code = (error as { code?: string }).code
       if (target === this.host.masterId || code === undefined || code === 'session/agent-busy' || code === 'session/writer-held') throw error
       await this.prompt(this.host.masterId, requestId, text, 'steer')
+    }
+  }
+  /**
+   * Show a reply as the main Session's own message in the conversation it went to. A local installation has no chat
+   * transport: its chat Channel is the person's conversation, so the message is written there. A message whose open step
+   * still holds unanswered tool calls waits for that step to end, so an assistant message never separates a call from its
+   * result. Each message id is shown once.
+   */
+  speak(sessionId: string, requestId: string, text: string): void {
+    const agent = this.ctx.agents.get(sessionId as SessionId)
+    if (!agent || this.host.store.get(KV.sessions.spoken(requestId))) return
+    if (this.unansweredTool(agent)) {
+      const waiting = this.waitingSpeech.get(agent.id) ?? []
+      waiting.push({ requestId, text })
+      this.waitingSpeech.set(agent.id, waiting)
+      return
+    }
+    this.appendSpeech(agent, { requestId, text })
+  }
+  /** Whether the Session's last assistant message holds a tool call whose result is not in the log yet. */
+  private unansweredTool(agent: Agent): boolean {
+    const events = agent.session.snapshotEvents()
+    const answered = new Set<string>()
+    for (const event of events) if (event.type === 'tool/result') answered.add(event.data.message.toolCallId)
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!
+      if (event.type !== 'assistant/message') continue
+      return event.data.message.content.some(block => block.type === 'tool-call' && !answered.has(block.id))
+    }
+    return false
+  }
+  /** Shows the messages that waited for a step, once its results are in the log. */
+  private flushSpeech(agent: Agent, event: { type: 'step/end'; data: { turn: number; step: number } } | { type: 'turn/end'; data: { turn: number } }): void {
+    const waiting = this.waitingSpeech.get(agent.id)
+    if (!waiting) return
+    this.waitingSpeech.delete(agent.id)
+    const step = event.type === 'step/end' ? event.data.step : this.lastStep(agent.session.snapshotEvents())?.step
+    for (const speech of waiting) this.appendSpeech(agent, speech, event.data.turn, step)
+  }
+  /** The turn and step to anchor a message shown outside a step: those of the Session's latest event that carries both. */
+  private lastStep(events: readonly { type: string; data: unknown }[]): { turn: number; step: number } | undefined {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const data = events[index]!.data as { turn?: unknown; step?: unknown }
+      if (typeof data?.turn === 'number' && typeof data?.step === 'number') return { turn: data.turn, step: data.step }
+    }
+    return undefined
+  }
+  /** Appends one assistant message carrying the message's text, at the given step or the Session's latest one. */
+  private appendSpeech(agent: Agent, speech: Speech, turn?: number, step?: number): void {
+    const boundary = turn !== undefined && step !== undefined ? { turn, step } : this.lastStep(agent.session.snapshotEvents())
+    try {
+      agent.session.append('assistant/message', {
+        turn: boundary?.turn ?? 0, step: boundary?.step ?? 0,
+        message: createAssistantMessage({ content: [{ type: 'text', text: speech.text }], source: { provider: 'dsh-superagent', model: 'reply' } }),
+        stream: [],
+      }, { surfaceOp: 'append' })
+      this.host.store.set(KV.sessions.spoken(speech.requestId), true)
+    } catch (error) {
+      // The message stays unshown and its receipt is already sent; a later retry of the same id shows it again if it can.
+      this.ctx.logger.warn('dsh-superagent could not show a reply in its conversation: %s', String(error))
     }
   }
   /** The decorated main Sessions, the home one included, whose turns a shutdown cancels. */
@@ -348,8 +418,22 @@ export class Sessions {
       const projections = this.ctx.get('sessionProjections') as { stateOf?: (session: Agent['session'], key: string) => unknown } | undefined
       const selected = typeof presets?.presetForSession === 'function' ? presets.presetForSession(agent.session)
         : projections?.stateOf?.(agent.session, 'agentPreset')
-      return (selected ?? agent.session.header.agentPreset) === ROUTER_PRESET
+      return (selected ?? this.loggedPreset(agent) ?? agent.session.header.agentPreset) === ROUTER_PRESET
     } catch { return false }
+  }
+  /**
+   * The preset the Session's log selected last. A registry records a selection as an event and updates its projection from
+   * that event; a Session created or resumed with a preset in its setup has the event before the projection catches up, and
+   * a Session whose log was read before the registry loaded has only the event.
+   */
+  private loggedPreset(agent: Agent): string | undefined {
+    // The preset registry's event type arrives with its package, not with this bundle's Session types.
+    const events = agent.session.snapshotEvents() as readonly { type: string; data: { agentPreset?: string } }[]
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!
+      if (event.type === 'agent-preset/selected') return event.data.agentPreset
+    }
+    return undefined
   }
   /**
    * An Executor Session's tools: only the profile's work tools, which DSH requires to be known, and none once its ticket
@@ -413,6 +497,9 @@ export class Sessions {
    * On demotion, also withdraws full access and the durable main record; a disposed main Session keeps both for its return.
    */
   private release(agent: Agent, demoted = false): void {
+    const waiting = this.waitingSpeech.get(agent.id)
+    this.waitingSpeech.delete(agent.id)
+    for (const speech of waiting ?? []) this.appendSpeech(agent, speech)
     const binding = this.bindings.get(agent)
     if (!binding) return
     this.bindings.delete(agent)

@@ -54,7 +54,7 @@ dsh plugin --profile superagent add "link:$PWD"
 于是：你在主对话说「在 webapp 里把 README 的 recieve 改成 receive」，或者在项目选择里选中 `webapp` 后直接说「把 README 的 recieve 改成 receive」→ 主 Session 收到候选 →
 `orchestrator_route` 接单并点名 `project: webapp` → 工单目录 `<work>/webapp/<工单名>` 从 `/root/src/webapp` 准备（填的是仓库链接就克隆） →
 执行器 Session 在那里改、跑检查、提交到 `agent/<名字>` 分支 → `orchestrator_report` 报告 →
-主 Session 把结果写进面板，并追加到 `<stateDir>/outbox/chat.md` → 人 review；明确同意合并后，执行器把 `agent/<名字>` 合并进项目目录当前检出的分支，再报告合并结果。
+主 Session 把结果写进面板、追加到 `<stateDir>/outbox/chat.md`，并作为主 Session 自己的消息显示在对话里 → 人 review；明确同意合并后，执行器把 `agent/<名字>` 合并进项目目录当前检出的分支，再报告合并结果。
 
 ## 工单拿到的变量
 
@@ -77,5 +77,5 @@ dsh plugin --profile superagent add "link:$PWD"
 - 合并由执行器在项目目录里执行：合并进它当前检出的分支，要求工作区干净；仓库链接和非 git 目录没有本地基分支，仍由人合并。
 - 仓库链接由执行器的 git 克隆，凭据来自你本机的 git 配置（`~/.gitconfig` 里的 `credential.helper`、`~/.git-credentials`、`~/.ssh` 里的密钥或 SSH agent）：公开仓库直接可用，私有仓库只要这台机器上的 git 不用你输入密码或确认就能克隆，工单也能。克隆不会弹出提示，需要现场输入凭据时会失败。DSH 读这些配置，不往里写东西；工单开始后，执行器自己的 git 仍使用隔离配置。
 - 主对话只有一个身份 `operator`，没有多人白名单。
-- 面板上的回复落在面板与 `outbox/chat.md`，不会作为消息再塞回对话。
+- 回复同时落在面板、`outbox/chat.md` 和发起对话的会话里：对话里显示为主 Session 自己的 assistant 消息，和普通输出一样可读。
 - `tests/sources.spec.ts` 里飞书事件消费者那条用例在整包并行跑时偶尔超时（子进程起得慢），单独跑稳定，与本地版改动无关。
