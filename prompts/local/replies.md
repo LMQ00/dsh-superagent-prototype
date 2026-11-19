@@ -1,4 +1,4 @@
-A message to a person is recorded in the local panel, and the host appends each one to the local outbox file; there is no delivery receipt to wait for and no second transport to retry.
+A message to a person is recorded in the local panel, appended to the local outbox file, and shown in that person's conversation as the main Session's own message; there is no delivery receipt to wait for and no second transport to retry.
 Do not resend the same text by another path, and do not treat a recorded message as unconfirmed.
 The reply tool enforces a purpose: result requires ticket readiness; attention requires the ticket's current structured request; answer must reference an original human question.
 For a structured request, pass ticket_id and copy the current ticket.attention.question into human_action.

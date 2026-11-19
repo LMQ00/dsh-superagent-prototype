@@ -11,6 +11,8 @@ export interface OutboxHost {
   readonly effects: Pick<Effects, 'enqueue' | 'cancel' | 'handle' | 'idle'>
   readonly sources: Pick<SourceRegistry, 'instance' | 'channelAllowed' | 'send'>
   readonly commands: Commands
+  /** Shows a delivered message in its own conversation, as a local installation does for its chat Channel. */
+  speak(message: OutboundMessage): void
   paused(): boolean
 }
 
@@ -48,5 +50,6 @@ export class Outbox implements OutboxPort {
     const result = await sources.send(receipt, commands)
     if (result === 'waiting') throw new Later('The Source is not installed')
     store.receipts.settle(receipt, result === 'gone' ? 'channelGone' : 'sent')
+    if (result !== 'gone') this.host.speak(receipt)
   }
 }

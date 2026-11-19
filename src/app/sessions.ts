@@ -1,7 +1,7 @@
 /** Lifecycle, prompt/tool/skill decoration, message delivery, and budget retry tracking for orchestrator and worker DSH sessions. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { MessageId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, type MessageId } from '@deepseek-ai/dsh-llm'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { dirname } from 'node:path'
@@ -52,6 +52,9 @@ interface SessionBinding {
   permissions?: string
   subagent?: true
 }
+
+/** One reply message waiting to be shown in its conversation. */
+interface Speech { requestId: string; text: string }
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
 export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
@@ -104,6 +107,8 @@ export class Sessions {
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
   private readonly retryHealth = new RetryHealth()
+  /** Messages a reply queued for a Session whose turn is still open, shown once that turn ends or the Session is reopened. */
+  private readonly waitingSpeech = new Map<string, Speech[]>()
   private readonly ctx: Context
   /** Registers ordered `relay` and `notice` effect handlers that deliver to the main Session. */
   constructor(private readonly host: SessionsHost) {
@@ -123,7 +128,9 @@ export class Sessions {
     ctx.on('session/event', (session, event) => {
       const agent = ctx.agents.get(session.id)
       const binding = agent && agent.session === session ? this.bindings.get(agent) : undefined
-      if (!agent || !binding || binding.subagent) return
+      if (!agent) return
+      if (agent.session === session && event.type === 'turn/end') this.flushSpeech(agent.id)
+      if (!binding || binding.subagent) return
       this.retryHealth.observe(agent.id, event)
       this.updateModelHealth()
     })
@@ -148,7 +155,9 @@ export class Sessions {
       })
     })
     ctx.on('agent/status', ({ agent, status }) => {
-      if (status === 'idle' && !this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
+      if (status !== 'idle') return
+      this.flushSpeech(agent.id)
+      if (!this.host.closing()) { this.retryHealth.clear(agent.id); this.updateModelHealth() }
     })
   }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
@@ -199,6 +208,84 @@ export class Sessions {
       const code = (error as { code?: string }).code
       if (target === this.host.masterId || code === undefined || code === 'session/agent-busy' || code === 'session/writer-held') throw error
       await this.prompt(this.host.masterId, requestId, text, 'steer')
+    }
+  }
+  /**
+   * Show a reply as the main Session's own message in the conversation it went to. A local installation has no chat
+   * transport: its chat Channel is the person's conversation, so the message is written there. It waits for the Session's
+   * open turn to end, so it never lands between a tool call and its result nor ends the next request. Each message id is
+   * shown once.
+   */
+  speak(sessionId: string, requestId: string, text: string): void {
+    // A caller may run inside a Session publication, and an append there is refused.
+    queueMicrotask(() => { void this.show(sessionId, { requestId, text }) })
+  }
+  /** Shows one message in its conversation, restoring that Session first when it is not loaded. */
+  private async show(sessionId: string, speech: Speech): Promise<void> {
+    try {
+      if (this.host.store.get(KV.sessions.spoken(speech.requestId))) return
+      const loaded = this.ctx.agents.get(sessionId as SessionId)
+      const agent = loaded ?? await this.restore(sessionId)
+      if (!agent) return
+      if (!this.closedTurn(agent) || !this.appendSpeech(agent, speech)) this.queueSpeech(sessionId, speech)
+    } catch (error) { this.ctx.logger.warn('dsh-superagent could not show a reply in its conversation: %s', String(error)) }
+  }
+  /** The Session with this id, resumed from its log so a reply reaches a conversation the person has not opened since. */
+  private async restore(sessionId: string): Promise<Agent | undefined> {
+    const resolved = await this.ctx.sessionController.resolveAgent(sessionId as SessionId)
+    if ('error' in resolved) {
+      this.ctx.logger.warn('dsh-superagent did not show a reply, because Session %s could not be opened: %s', sessionId, String(resolved.error.message))
+      return undefined
+    }
+    return resolved.agent
+  }
+  /** Whether the Session's last turn ended, so a message appended now starts no request with an assistant message. */
+  private closedTurn(agent: Agent): boolean {
+    const events = agent.session.snapshotEvents()
+    return events.length === 0 || events.at(-1)!.type === 'turn/end'
+  }
+  private queueSpeech(sessionId: string, speech: Speech): void {
+    const waiting = this.waitingSpeech.get(sessionId) ?? []
+    waiting.push(speech)
+    this.waitingSpeech.set(sessionId, waiting)
+  }
+  /**
+   * Shows what waited for this Session, after the publication that announced its turn's end. A message that cannot be
+   * appended stays queued, so a later flush or its next opening shows it.
+   */
+  private flushSpeech(sessionId: string): void {
+    const waiting = this.waitingSpeech.get(sessionId)
+    if (!waiting?.length) return
+    this.waitingSpeech.delete(sessionId)
+    queueMicrotask(() => {
+      const agent = this.ctx.agents.get(sessionId as SessionId)
+      if (!agent) { for (const speech of waiting) this.queueSpeech(sessionId, speech); return }
+      const failed = waiting.filter(speech => !this.appendSpeech(agent, speech))
+      for (const speech of failed) this.queueSpeech(sessionId, speech)
+    })
+  }
+  /** The turn and step to anchor a message shown outside a step: those of the Session's latest event that carries both. */
+  private lastStep(events: readonly { type: string; data: unknown }[]): { turn: number; step: number } | undefined {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const data = events[index]!.data as { turn?: unknown; step?: unknown }
+      if (typeof data?.turn === 'number' && typeof data?.step === 'number') return { turn: data.turn, step: data.step }
+    }
+    return undefined
+  }
+  /** Appends one assistant message carrying the message's text; `false` when the Session refused it. */
+  private appendSpeech(agent: Agent, speech: Speech): boolean {
+    const boundary = this.lastStep(agent.session.snapshotEvents())
+    try {
+      agent.session.append('assistant/message', {
+        turn: boundary?.turn ?? 0, step: boundary?.step ?? 0,
+        message: createAssistantMessage({ content: [{ type: 'text', text: speech.text }], source: { provider: 'dsh-superagent', model: 'reply' } }),
+        stream: [],
+      }, { surfaceOp: 'append' })
+      this.host.store.set(KV.sessions.spoken(speech.requestId), true)
+      return true
+    } catch (error) {
+      this.ctx.logger.warn('dsh-superagent could not show a reply in its conversation: %s', String(error))
+      return false
     }
   }
   /** The decorated main Sessions, the home one included, whose turns a shutdown cancels. */
@@ -348,8 +435,22 @@ export class Sessions {
       const projections = this.ctx.get('sessionProjections') as { stateOf?: (session: Agent['session'], key: string) => unknown } | undefined
       const selected = typeof presets?.presetForSession === 'function' ? presets.presetForSession(agent.session)
         : projections?.stateOf?.(agent.session, 'agentPreset')
-      return (selected ?? agent.session.header.agentPreset) === ROUTER_PRESET
+      return (selected ?? this.loggedPreset(agent) ?? agent.session.header.agentPreset) === ROUTER_PRESET
     } catch { return false }
+  }
+  /**
+   * The preset the Session's log selected last. A registry records a selection as an event and updates its projection from
+   * that event; a Session created or resumed with a preset in its setup has the event before the projection catches up, and
+   * a Session whose log was read before the registry loaded has only the event.
+   */
+  private loggedPreset(agent: Agent): string | undefined {
+    // The preset registry's event type arrives with its package, not with this bundle's Session types.
+    const events = agent.session.snapshotEvents() as readonly { type: string; data: { agentPreset?: string } }[]
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!
+      if (event.type === 'agent-preset/selected') return event.data.agentPreset
+    }
+    return undefined
   }
   /**
    * An Executor Session's tools: only the profile's work tools, which DSH requires to be known, and none once its ticket
