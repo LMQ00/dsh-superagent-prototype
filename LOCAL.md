@@ -75,7 +75,7 @@ dsh plugin --profile superagent add "link:$PWD"
 
 - 不开 PR，所以没有 CI、没有 review 流水线：`ready` 只代表 agent 自检通过。
 - 合并由执行器在项目目录里执行：合并进它当前检出的分支，要求工作区干净；仓库链接和非 git 目录没有本地基分支，仍由人合并。
-- 仓库链接由执行器的 git 克隆，凭据来自你本机的 git 配置（`~/.gitconfig` 里的 `credential.helper`、`~/.git-credentials`、`~/.ssh` 里的密钥或 SSH agent）：公开仓库直接可用，私有仓库只要这台机器上的 git 不用你输入密码或确认就能克隆，工单也能。克隆不会弹出提示，需要现场输入凭据时会失败。DSH 读这些配置，不往里写东西；工单开始后，执行器自己的 git 仍使用隔离配置。
+- 仓库链接由执行器的 git 克隆，凭据来自你本机的 git 配置（`~/.gitconfig` 里的 `credential.helper`、`~/.git-credentials`、`~/.ssh` 里的密钥或 SSH agent）：公开仓库直接可用，私有仓库只要这台机器上的 git 不用你输入密码或确认就能克隆，工单也能。克隆不会弹出提示，需要现场输入凭据时会失败。DSH 读这些配置，不往里写东西；工单开始后，执行器的 git 也用这台机器的 git 配置，提交署名与凭据都来自那里。
 - 主对话只有一个身份 `operator`，没有多人白名单。
 - 回复同时落在面板、`outbox/chat.md` 和发起对话的会话里：对话里显示为主 Session 自己的 assistant 消息，和普通输出一样可读。
 - `tests/sources.spec.ts` 里飞书事件消费者那条用例在整包并行跑时偶尔超时（子进程起得慢），单独跑稳定，与本地版改动无关。

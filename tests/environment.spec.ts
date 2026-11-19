@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, commandArgv, credentialHelper, operatorGitVariables, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, commandArgv, credentialHelper, localProcessVariables, operatorGitVariables, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -19,6 +19,15 @@ const program = (path: string, body: string): string => { writeFileSync(path, `#
 /** Worker shell environment after DSH strips credential-shaped variables. */
 const workerEnv = (env: Record<string, string | undefined>): Record<string, string> =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined && !SENSITIVE_ENV_PATTERN.test(entry[0])))
+/** Asks `git credential fill` for github.com in a child process running with `env`. */
+const credentialFill = (env: Record<string, string>): Promise<{ stdout: string, stderr: string, code: number | null }> => new Promise(resolve => {
+  const child = spawn('git', ['credential', 'fill'], { cwd: dir, env })
+  let stdout = '', stderr = ''
+  child.stdout.on('data', chunk => { stdout += String(chunk) })
+  child.stderr.on('data', chunk => { stderr += String(chunk) })
+  child.on('close', code => resolve({ stdout, stderr, code }))
+  child.stdin?.end('protocol=https\nhost=github.com\n\n')
+})
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'environment-')); mkdirSync(join(dir, 'real')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
@@ -124,20 +133,28 @@ describe('agent git configuration', () => {
     writeFileSync(join(home, '.git-credentials'), 'https://operator:operator-secret@github.com\n')
     await writeEnvironment(testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: '/opt/agent tools/gh' } }), [])
     const env = workerEnv({ PATH: process.env.PATH, HOME: home, ...agentVariables(dir) })
-    const fill = (variables: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> => new Promise(resolve => {
-      const child = spawn('git', ['credential', 'fill'], { cwd: dir, env: { ...env, ...variables } })
-      let stdout = '', stderr = ''
-      child.stdout.on('data', chunk => { stdout += String(chunk) })
-      child.stderr.on('data', chunk => { stderr += String(chunk) })
-      child.on('close', code => resolve({ stdout, stderr, code }))
-      child.stdin?.end('protocol=https\nhost=github.com\n\n')
-    })
+    const fill = (variables: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> =>
+      credentialFill(workerEnv({ ...env, ...variables }))
     // A worker keeps the isolated configuration: the operator's helper never answers.
     await expect(fill({})).resolves.toMatchObject({ stderr: expect.stringContaining('terminal prompts disabled') })
     await expect(fill({})).resolves.not.toMatchObject({ code: 0 })
     // Undefined values drop the variables, so git reads the operator's own global configuration again.
     await expect(fill(operatorGitVariables())).resolves.toMatchObject({ code: 0, stdout: expect.stringContaining('username=operator\n') })
     await expect(fill(operatorGitVariables())).resolves.toMatchObject({ code: 0, stdout: expect.stringContaining('password=operator-secret\n') })
+  })
+  it('gives a local installation\'s Sessions the operator\'s git configuration while the host variables stay stripped', async () => {
+    const home = join(dir, 'home'); mkdirSync(home)
+    writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Operator\n\temail = operator@example.com\n[credential]\n\thelper = store\n')
+    writeFileSync(join(home, '.git-credentials'), 'https://operator:operator-secret@github.com\n')
+    await writeEnvironment(testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: '' }, feishu: undefined }), [])
+    const variables = localProcessVariables(agentVariables(dir))
+    // The worker git configuration and the prompting switches are gone, so git reads the operator's own files.
+    expect([variables.GIT_CONFIG_GLOBAL, variables.GIT_CONFIG_NOSYSTEM, variables.GIT_ASKPASS, variables.GIT_TERMINAL_PROMPT]).toEqual([undefined, undefined, undefined, undefined])
+    // The host's repository location, tokens and identity stay out of the environment.
+    for (const name of [...GIT_LOCATION, 'GH_TOKEN', 'GITHUB_TOKEN', 'GIT_AUTHOR_NAME', 'GIT_COMMITTER_EMAIL']) expect(name in variables && variables[name] === undefined).toBe(true)
+    const env = workerEnv({ PATH: process.env.PATH, HOME: home, ...variables })
+    await expect(credentialFill(env)).resolves.toMatchObject({ code: 0, stdout: expect.stringContaining('password=operator-secret\n') })
+    expect((await exec('git', ['var', 'GIT_AUTHOR_IDENT'], { cwd: dir, env })).stdout).toContain('Operator <operator@example.com>')
   })
 })
 
