@@ -8,7 +8,7 @@ import { sourceSkills } from './context.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
   from './prompts.ts'
-import { policyVersion } from '../policy.ts'
+import { ProjectSchema, policyVersion } from '../policy.ts'
 import { KV } from '../kv.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
@@ -150,6 +150,8 @@ const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), Sou
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
 const ConversationQuery = z.object({ session: z.string().trim().min(1).max(200) })
 const ConversationPick = z.object({ session: z.string().trim().min(1).max(200), project: z.string().trim().min(1).max(40).nullable() }).strict()
+const ConversationProjectAdd = z.object({ session: z.string().trim().min(1).max(200),
+  project: z.object({ name: z.string(), path: z.string() }).strict() }).strict()
 /** The selector view for one conversation: whether it is the main Session, its chosen project, and the registered projects. */
 export function conversationView(runtime: HttpHost, session: string) {
   const projects = runtime.store.settings().executor.projects.map(({ name, path }) => ({ name, path }))
@@ -178,6 +180,30 @@ function routes(runtime: HttpHost): Routes {
       }
       if (project === null) store.delete(KV.sessions.project(session))
       else store.set(KV.sessions.project(session), project)
+      return conversationView(runtime, session)
+    },
+    'POST conversation/projects': async ({ body }) => {
+      const { session, project: picked } = ConversationProjectAdd.parse(await body())
+      if (!runtime.sessions.isMain(session)) throw new RouteError(400, 'Only the main Session takes requests')
+      // The executor schema owns the project's name, source and prepare-command rules, so this route validates through it.
+      const project = ProjectSchema.parse(picked)
+      const current = store.settings()
+      if (current.executor.projects.some(item => item.name === project.name)) {
+        throw new RouteError(400, `The project ${project.name} is already registered in the executor settings`)
+      }
+      await runtime.settings.save('executor', { ...current.executor, projects: [...current.executor.projects, project] },
+        store.blockRevision('executor'), 'panel')
+      return conversationView(runtime, session)
+    },
+    'DELETE conversation/projects/:name': async ({ params, query }) => {
+      const { session } = ConversationQuery.parse(query)
+      if (!runtime.sessions.isMain(session)) throw new RouteError(400, 'Only the main Session takes requests')
+      const current = store.settings()
+      const projects = current.executor.projects.filter(item => item.name !== params.name)
+      if (projects.length === current.executor.projects.length) throw new RouteError(404, 'Project not found')
+      await runtime.settings.save('executor', { ...current.executor, projects }, store.blockRevision('executor'), 'panel')
+      // A conversation pointed at the removed project starts unselected instead of selecting a later project of the same name.
+      for (const key of store.keys(KV.sessions.project)) if (store.get(key) === params.name) store.delete(key)
       return conversationView(runtime, session)
     },
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),

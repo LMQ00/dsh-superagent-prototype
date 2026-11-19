@@ -40,20 +40,36 @@ const openMaster = async (container: HTMLElement) => {
   await act(async () => { button.click() })
   for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
-const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-  const target = new URL(url, 'http://127.0.0.1')
-  const path = target.pathname.replace('/orchestrator/api/', '')
-  if (path === 'conversation') {
-    const projects = [{ name: 'webapp', path: '/srv/webapp' }, { name: 'api', path: '/srv/api' }]
-    const body = init?.body === undefined ? undefined : JSON.parse(String(init.body)) as { session: string; project: string | null }
-    const session = body?.session ?? target.searchParams.get('session')
-    return Response.json({ session, master: session === 'master', selected: body === undefined ? 'webapp' : body.project, projects })
-  }
-  if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
-  if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
-    setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
-  return Response.json({ error: 'unavailable' }, { status: 503 })
+const serve = (listed: { name: string; path: string }[] = [{ name: 'webapp', path: '/srv/webapp' },
+  { name: 'api', path: '/srv/api' }]) => {
+  let projects = listed
+  let selected = projects.length ? 'webapp' : ''
+  return vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const target = new URL(url, 'http://127.0.0.1')
+    const path = target.pathname.replace('/orchestrator/api/', '')
+    if (path === 'conversation') {
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body)) as { session: string; project: string | null }
+      const session = body?.session ?? target.searchParams.get('session')
+      if (body !== undefined) selected = body.project ?? ''
+      return Response.json({ session, master: session === 'master', selected: body === undefined ? selected : body.project, projects })
+    }
+    if (path === 'conversation/projects') {
+      const body = JSON.parse(String(init!.body)) as { session: string; project: { name: string; path: string } }
+      projects = [...projects, body.project]
+      return Response.json({ session: body.session, master: true, selected: selected || null, projects })
+    }
+    if (path.startsWith('conversation/projects/')) {
+      const name = decodeURIComponent(path.slice('conversation/projects/'.length))
+      projects = projects.filter(project => project.name !== name)
+      if (selected === name) selected = ''
+      return Response.json({ session: target.searchParams.get('session'), master: true, selected: selected || null, projects })
+    }
+    if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
+    if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
+      setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
+    return Response.json({ error: 'unavailable' }, { status: 503 })
 }))
+}
 afterEach(() => { vi.unstubAllGlobals() })
 
 it('registers a localized main panel, sidebar entry and Plugin Manager row page, and no settings section', () => {
@@ -107,6 +123,132 @@ it('shows and saves the project the main conversation routes to, and hides outsi
   const other = await render(seat, { sessionId: 'worker', t })
   expect(other.container.querySelector('select')).toBeNull()
   other.dispose()
+})
+
+it('manages the project registry from the composer seat', async () => {
+  serve()
+  const { entries } = fixture(['master'])
+  const seat = entries.find(item => item.options.name === 'conversation.input.left')!
+  const view = await render(seat, { sessionId: 'master', t })
+  const manage = view.container.querySelector<HTMLButtonElement>('button[aria-label="管理项目"]')!
+  expect(manage.getAttribute('aria-expanded')).toBe('false')
+  await act(async () => { manage.click() })
+  const pop = document.querySelector<HTMLElement>('[role="dialog"][aria-label="管理项目"]')!
+  expect(pop.textContent).toContain('webapp')
+  expect(pop.textContent).toContain('/srv/api')
+  // Removing a project calls its own route; the list comes back without it.
+  const remove = [...pop.querySelectorAll('li')].find(row => row.textContent?.includes('api'))!.querySelector('button')!
+  await act(async () => {
+    remove.click()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  let calls = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+  expect(calls.at(-1)?.[0]).toContain('conversation/projects/api?session=master')
+  expect(calls.at(-1)?.[1]).toMatchObject({ method: 'DELETE' })
+  expect(pop.textContent).not.toContain('/srv/api')
+  // Adding one posts the trimmed name and source, then clears the form.
+  const inputs = [...pop.querySelectorAll('input')]
+  await act(async () => {
+    const set = (element: HTMLInputElement, value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    set(inputs[0]!, ' api ')
+    set(inputs[1]!, ' /srv/api ')
+  })
+  await act(async () => {
+    [...pop.querySelectorAll('button')].find(button => button.textContent === '添加')!.click()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  calls = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+  expect(calls.at(-1)?.[0]).toContain('conversation/projects')
+  expect(calls.at(-1)?.[1]).toMatchObject({ method: 'POST',
+    body: JSON.stringify({ session: 'master', project: { name: 'api', path: '/srv/api' } }) })
+  expect(inputs.map(input => input.value)).toEqual(['', ''])
+  expect(pop.textContent).toContain('/srv/api')
+  view.dispose()
+})
+
+it('ignores a poll that started before a project was removed', async () => {
+  vi.useFakeTimers()
+  try {
+    let projects = [{ name: 'webapp', path: '/srv/webapp' }, { name: 'api', path: '/srv/api' }]
+    let poll: ((value: Response) => void) | undefined
+    let reads = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const target = new URL(url, 'http://127.0.0.1')
+      const path = target.pathname.replace('/orchestrator/api/', '')
+      const view = () => Response.json({ session: 'master', master: true, selected: 'webapp', projects })
+      if (path === 'conversation') {
+        reads++
+        // Hold the second read, the poll that runs while the removal is in flight.
+        if (reads > 1 && poll === undefined) return await new Promise<Response>(resolve => { poll = resolve })
+        return view()
+      }
+      if (path.startsWith('conversation/projects/')) {
+        projects = projects.filter(project => project.name !== decodeURIComponent(path.slice('conversation/projects/'.length)))
+        return view()
+      }
+      return Response.json({ error: 'unavailable' }, { status: 503 })
+    }))
+    const { entries } = fixture(['master'])
+    const seat = entries.find(item => item.options.name === 'conversation.input.left')!
+    const container = document.createElement('div'); document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<seat.component sessionId="master" t={t} />) })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="管理项目"]')!.click() })
+    const pop = document.querySelector<HTMLElement>('[role="dialog"][aria-label="管理项目"]')!
+    // The interval starts a read that stays unanswered until after the removal.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(poll).toBeDefined()
+    await act(async () => {
+      [...pop.querySelectorAll('li')].find(row => row.textContent?.includes('api'))!.querySelector('button')!.click()
+      await Promise.resolve(); await Promise.resolve()
+    })
+    expect(pop.textContent).not.toContain('/srv/api')
+    // Its stale answer must not put the removed project back.
+    await act(async () => {
+      poll!(Response.json({ session: 'master', master: true, selected: 'webapp', projects: [{ name: 'webapp', path: '/srv/webapp' },
+        { name: 'api', path: '/srv/api' }] }))
+      await Promise.resolve(); await Promise.resolve()
+    })
+    expect(pop.textContent).not.toContain('/srv/api')
+    act(() => { root.unmount() }); container.remove()
+  } finally { vi.useRealTimers() }
+})
+
+it('adds the first project from the seat when the registry is empty', async () => {
+  serve([])
+  const { entries } = fixture(['master'])
+  const seat = entries.find(item => item.options.name === 'conversation.input.left')!
+  const view = await render(seat, { sessionId: 'master', t })
+  expect(view.container.querySelector('select')).toBeNull()
+  const add = [...view.container.querySelectorAll('button')].find(button => button.textContent === '添加项目')!
+  await act(async () => { add.click() })
+  const pop = document.querySelector<HTMLElement>('[role="dialog"][aria-label="管理项目"]')!
+  expect(pop.textContent).toContain('还没有登记项目。')
+  const inputs = [...pop.querySelectorAll('input')]
+  await act(async () => {
+    const set = (element: HTMLInputElement, value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    set(inputs[0]!, 'webapp')
+    set(inputs[1]!, '/srv/webapp')
+  })
+  await act(async () => {
+    [...pop.querySelectorAll('button')].find(button => button.textContent === '添加')!.click()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  const calls = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+  expect(calls.at(-1)?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ session: 'master',
+    project: { name: 'webapp', path: '/srv/webapp' } }) })
+  // The saved project replaces the add-only seat with the select.
+  expect(view.container.querySelector('select')?.value).toBe('')
+  expect([...view.container.querySelectorAll('option')].map(option => option.textContent)).toEqual(['未选择项目', 'webapp'])
+  expect([...view.container.querySelectorAll('button')].some(button => button.getAttribute('aria-label') === '管理项目')).toBe(true)
+  view.dispose()
 })
 
 it('polls one request at a time, keeps the data while new dependencies load, and polls less while hidden', async () => {
